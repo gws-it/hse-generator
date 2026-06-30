@@ -37,7 +37,11 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        print(f"[WARNING] Database init failed: {e}")
+        print("[WARNING] App will start but DB features won't work until DATABASE_URL is correct.")
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────
