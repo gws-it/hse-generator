@@ -337,10 +337,22 @@ def history_detail(generation_id: int, db: Session = Depends(get_db), current_us
 # ── Serve React frontend ───────────────────────────────────────────────────
 
 static_dir = Path(__file__).parent / "static"
-if static_dir.exists():
-    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
 
-    @app.get("/{full_path:path}")
-    def spa(full_path: str):
-        index = static_dir / "index.html"
+@app.get("/")
+def root():
+    index = static_dir / "index.html"
+    if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))
+    return HTMLResponse("<h2>HSE Generator API is running. Frontend not built yet.</h2>")
+
+if static_dir.exists():
+    assets_dir = static_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+@app.get("/{full_path:path}")
+def spa(full_path: str):
+    index = static_dir / "index.html"
+    if index.exists():
+        return HTMLResponse(index.read_text(encoding="utf-8"))
+    raise HTTPException(status_code=404, detail="Frontend not found")
