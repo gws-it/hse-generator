@@ -26,7 +26,8 @@ export default function LoginPage() {
         localStorage.setItem('user', JSON.stringify(res.data.user))
         navigate('/generate')
       } catch (err) {
-        alert('Login failed. Please try again.')
+        const detail = err.response?.data?.detail || err.message || 'Unknown error'
+        alert(`Login failed: ${detail}`)
       }
     }
   }, [navigate])
