@@ -58,9 +58,23 @@ def google_auth(body: dict, db: Session = Depends(get_db)):
     if not google_token:
         raise HTTPException(400, "No credential provided")
 
-    google_data = verify_google_token(google_token)
-    user = get_or_create_user(db, google_data)
-    token = create_jwt(user.id)
+    try:
+        google_data = verify_google_token(google_token)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Token verification error: {e}")
+
+    try:
+        user = get_or_create_user(db, google_data)
+    except Exception as e:
+        raise HTTPException(500, f"Database error: {e}")
+
+    try:
+        token = create_jwt(user.id)
+    except Exception as e:
+        raise HTTPException(500, f"JWT error: {e}")
+
     return {"token": token, "user": {"id": user.id, "name": user.name, "email": user.email, "picture": user.picture}}
 
 
