@@ -14,21 +14,13 @@ Project types and their typical hazard profiles:
 
 Risk Rating (Singapore Standard):
 - Severity (S): 1=Negligible, 2=Minor injury/first aid, 3=Major injury/hospitalisation, 4=Permanent disability, 5=Fatality
-- Likelihood (L): 1=Rare (<1/year), 2=Unlikely (1/year), 3=Possible (monthly), 4=Likely (weekly), 5=Almost certain (daily)
-- RPN = S × L | Low: 1-4 | Medium: 5-9 | High: 10-16 | Critical: 17-25
-
-Control hierarchy (use in this order):
-1. Elimination - remove the hazard entirely
-2. Substitution - replace with something safer
-3. Engineering - physical controls (guards, barriers, ventilation)
-4. Administrative - procedures, training, supervision, permits
-5. PPE - last resort
+- Likelihood (L): 1=Rare, 2=Unlikely, 3=Possible, 4=Likely, 5=Almost certain
+- RPN = S × L | Low:1-4 | Medium:5-9 | High:10-16 | Critical:17-25
 
 Always output ONLY valid JSON with no markdown, no commentary."""
 
 
 def extract_project_details(mos_text: str) -> dict:
-    """Use Claude to extract and prefill project details from MOS."""
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1000,
@@ -49,14 +41,144 @@ def extract_project_details(mos_text: str) -> dict:
   "assessment_date": "date in DD MMM YYYY format or empty string"
 }}
 
-Use empty string "" or empty array [] when information is not found. For ra_members, include up to 3 names.
+Use empty string or empty array when not found. Limit ra_members to 3 names.
 
-METHOD STATEMENT TEXT:
-{mos_text[:8000]}"""
+METHOD STATEMENT:
+{mos_text[:6000]}"""
         }]
     )
-    text = _clean_json(response.content[0].text)
-    return json.loads(text)
+    return json.loads(_clean_json(response.content[0].text))
+
+
+def _generate_ra(mos_text: str, project_details: dict, few_shot_examples: list = None,
+                 feedback: str = None, previous_ra: dict = None) -> dict:
+    """Generate only the RA section."""
+
+    few_shot_block = ""
+    if few_shot_examples:
+        few_shot_block = "\n\n--- REFERENCE EXAMPLES ---\n"
+        for ex in few_shot_examples[:1]:
+            ra_ex = ex.get("ra", {})
+            snippet = json.dumps(ra_ex, indent=2)[:2000]
+            few_shot_block += f"\nPast {ex.get('project_type','')} RA example:\n{snippet}\n"
+        few_shot_block += "--- END ---\n"
+
+    feedback_block = ""
+    if feedback and previous_ra:
+        feedback_block = f"""
+--- USER FEEDBACK ---
+{feedback}
+
+PREVIOUS RA (fix the issues above):
+{json.dumps(previous_ra, indent=2)[:4000]}
+--- END FEEDBACK ---
+"""
+
+    prompt = f"""Generate a complete Risk Assessment (RA) for ALL activities in this Method Statement.
+
+PROJECT: {project_details.get('project_name','')} | Type: {project_details.get('project_type','')} | Location: {project_details.get('location','')}
+{few_shot_block}{feedback_block}
+METHOD STATEMENT (activities section):
+{mos_text[:8000]}
+
+Output ONLY this JSON (no markdown):
+{{
+  "activities": [
+    {{
+      "sn": "1.1",
+      "sub_activity": "Activity name",
+      "hazard": "Specific hazard for this activity",
+      "possible_injury": "Possible injury/damage/environmental impact",
+      "existing_controls": {{
+        "elimination": "measure or NA",
+        "substitution": "measure or NA",
+        "engineering": "engineering controls",
+        "administrative": "administrative controls including permits",
+        "ppe": "required PPE"
+      }},
+      "initial_s": 4,
+      "initial_l": 2,
+      "initial_rpn": 8,
+      "additional_controls": {{
+        "elimination": "NA",
+        "substitution": "NA",
+        "engineering": "additional measure or NA",
+        "administrative": "additional measure or NA",
+        "ppe": "NA"
+      }},
+      "residual_s": 3,
+      "residual_l": 1,
+      "residual_rpn": 3,
+      "implementation_person": "Site Supervisor",
+      "due_date": "On-going",
+      "remarks": ""
+    }}
+  ]
+}}
+
+Include ALL activities from the MOS. Last activity must be SGSecure / Emergency Preparedness."""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8192,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return json.loads(_clean_json(response.content[0].text))
+
+
+def _generate_swp(mos_text: str, project_details: dict, ra_activities: list,
+                  feedback: str = None, previous_swp: dict = None) -> dict:
+    """Generate only the SWP section."""
+
+    feedback_block = ""
+    if feedback and previous_swp:
+        feedback_block = f"""
+--- USER FEEDBACK ---
+{feedback}
+
+PREVIOUS SWP (fix the issues above):
+{json.dumps(previous_swp, indent=2)[:4000]}
+--- END FEEDBACK ---
+"""
+
+    activity_names = [a.get("sub_activity", "") for a in ra_activities]
+
+    prompt = f"""Generate a Safe Work Procedure (SWP) for this project.
+
+PROJECT: {project_details.get('project_name','')} | Type: {project_details.get('project_type','')} | Location: {project_details.get('location','')}
+{feedback_block}
+ACTIVITIES TO COVER:
+{json.dumps(activity_names, indent=2)}
+
+METHOD STATEMENT:
+{mos_text[:6000]}
+
+Output ONLY this JSON (no markdown):
+{{
+  "purpose": "Clear purpose statement for this SWP",
+  "location": "{project_details.get('location','')}",
+  "activities": [
+    {{
+      "name": "Activity name matching RA",
+      "steps": [
+        "Specific actionable step 1 for workers",
+        "Step 2",
+        "Continue all steps needed"
+      ]
+    }}
+  ]
+}}
+
+Include an activity for every item in the activities list above. Keep each step concise and worker-facing."""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8192,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return json.loads(_clean_json(response.content[0].text))
 
 
 def generate_ra_swp(
@@ -66,121 +188,34 @@ def generate_ra_swp(
     feedback: str = None,
     previous_output: dict = None,
 ) -> dict:
-    """Generate RA and SWP. If feedback provided, regenerate with corrections."""
+    """Generate RA and SWP in two separate calls to avoid token limit truncation."""
 
-    few_shot_block = ""
-    if few_shot_examples:
-        few_shot_block = "\n\n--- REFERENCE EXAMPLES FROM PAST PROJECTS ---\n"
-        for ex in few_shot_examples[:2]:
-            snippet = json.dumps(ex, indent=2)[:3000]
-            few_shot_block += f"\nPast {ex.get('project_type', '')} example:\n{snippet}\n"
-        few_shot_block += "--- END EXAMPLES ---\n"
+    prev_ra = previous_output.get("ra") if previous_output else None
+    prev_swp = previous_output.get("swp") if previous_output else None
 
-    feedback_block = ""
-    if feedback and previous_output:
-        prev_snippet = json.dumps(previous_output, indent=2)[:6000]
-        feedback_block = f"""
---- USER FEEDBACK ON PREVIOUS GENERATION ---
-{feedback}
+    ra = _generate_ra(mos_text, project_details, few_shot_examples, feedback, prev_ra)
+    swp = _generate_swp(mos_text, project_details, ra.get("activities", []), feedback, prev_swp)
 
-PREVIOUS GENERATION (fix the issues above):
-{prev_snippet}
---- END FEEDBACK ---
-"""
-
-    prompt = f"""Generate a complete, detailed Risk Assessment (RA) and Safe Work Procedure (SWP) based on this Method Statement.
-
-PROJECT DETAILS:
-- Project Name: {project_details.get('project_name', '')}
-- Project Type: {project_details.get('project_type', '')}
-- Location: {project_details.get('location', '')}
-- Company: {project_details.get('company', 'GWS LIVINGART PTE LTD')}
-- Client: {project_details.get('client', '')}
-{few_shot_block}
-{feedback_block}
-
-METHOD STATEMENT:
-{mos_text[:10000]}
-
-Output this JSON structure exactly — include ALL activities from the MOS, be thorough and specific:
-
-{{
-  "project_type": "{project_details.get('project_type', '')}",
-  "ra": {{
-    "activities": [
-      {{
-        "sn": "1.1",
-        "sub_activity": "Activity name",
-        "hazard": "Specific hazard description relevant to this activity",
-        "possible_injury": "Possible injury / ill-health / property damage / environmental impact",
-        "existing_controls": {{
-          "elimination": "Specific elimination measure or NA",
-          "substitution": "Specific substitution measure or NA",
-          "engineering": "Specific engineering controls",
-          "administrative": "Specific administrative controls including permits, training, supervision",
-          "ppe": "Required PPE for this activity"
-        }},
-        "initial_s": 4,
-        "initial_l": 2,
-        "initial_rpn": 8,
-        "additional_controls": {{
-          "elimination": "NA",
-          "substitution": "NA",
-          "engineering": "Additional engineering measure or NA",
-          "administrative": "Additional administrative measure or NA",
-          "ppe": "NA"
-        }},
-        "residual_s": 3,
-        "residual_l": 1,
-        "residual_rpn": 3,
-        "implementation_person": "Site Supervisor",
-        "due_date": "On-going",
-        "remarks": ""
-      }}
-    ]
-  }},
-  "swp": {{
-    "purpose": "Clear purpose statement describing what this SWP covers and its scope",
-    "location": "{project_details.get('location', '')}",
-    "activities": [
-      {{
-        "name": "Activity name matching RA",
-        "steps": [
-          "Specific step 1 — actionable instruction for workers",
-          "Specific step 2",
-          "Continue for all steps needed"
-        ]
-      }}
-    ]
-  }}
-}}
-
-Requirements:
-- Include every activity from the MOS work sequence
-- Always end with SGSecure / Emergency Preparedness as the last activity
-- Each activity should have 3-6 specific hazards addressed
-- SWP steps must be worker-facing, clear, and actionable
-- Risk ratings must be realistic and follow Singapore WSH standards
-- Initial RPN should be higher than residual RPN (controls must reduce risk)"""
-
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    text = _clean_json(response.content[0].text)
-    return json.loads(text)
+    return {
+        "project_type": project_details.get("project_type", ""),
+        "ra": ra,
+        "swp": swp,
+    }
 
 
 def _clean_json(text: str) -> str:
     text = text.strip()
-    if text.startswith("```"):
+    if "```" in text:
         parts = text.split("```")
-        text = parts[1] if len(parts) > 1 else text
-        if text.startswith("json"):
-            text = text[4:]
-    if text.endswith("```"):
-        text = text[:-3]
+        for part in parts:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{") or part.startswith("["):
+                text = part
+                break
+    # Remove any trailing content after the last closing brace
+    last_brace = text.rfind("}")
+    if last_brace != -1:
+        text = text[:last_brace + 1]
     return text.strip()
