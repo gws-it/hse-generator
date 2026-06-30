@@ -151,6 +151,8 @@ def generate_ra_step(body: dict, db: Session = Depends(get_db), current_user: Us
     try:
         ra = _generate_ra(mos_text, project_details, few_shot)
     except Exception as e:
+        import traceback
+        print(f"[ERROR] RA generation failed: {traceback.format_exc()}")
         raise HTTPException(500, f"RA generation failed: {e}")
 
     gen = Generation(
@@ -185,6 +187,8 @@ def generate_swp_step(generation_id: int, db: Session = Depends(get_db), current
     try:
         swp = _generate_swp(gen.mos_text, project_details, ra_activities)
     except Exception as e:
+        import traceback
+        print(f"[ERROR] SWP generation failed: {traceback.format_exc()}")
         raise HTTPException(500, f"SWP generation failed: {e}")
 
     gen.ra_swp_json = {**gen.ra_swp_json, "swp": swp}

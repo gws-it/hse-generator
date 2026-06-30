@@ -72,20 +72,21 @@ export default function GeneratePage() {
       // Step 1 of 2: Generate RA
       setProgressLabel('Step 1 of 2 — AI is generating Risk Assessment…')
       setProgress(10)
-      const raRes = await api.post('/generate/ra', { mos_text: mosText, project_details: projectDetails })
+      const raRes = await api.post('/generate/ra', { mos_text: mosText, project_details: projectDetails }, { timeout: 180000 })
       setProgress(55)
 
       // Step 2 of 2: Generate SWP
       setProgressLabel('Step 2 of 2 — AI is generating Safe Work Procedure…')
       setProgress(60)
-      const swpRes = await api.post(`/generate/swp/${raRes.data.generation_id}`)
+      const swpRes = await api.post(`/generate/swp/${raRes.data.generation_id}`, {}, { timeout: 180000 })
       setProgress(100)
 
       setGenerationId(raRes.data.generation_id)
       setRaSWP({ project_type: projectDetails.project_type, ra: raRes.data.ra, swp: swpRes.data.swp })
       setStep(2)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Generation failed. Please try again.')
+      const detail = err.response?.data?.detail || err.message || 'Unknown error'
+      setError(`Generation failed: ${detail}`)
     } finally {
       setLoading(false)
       setProgressLabel('')
