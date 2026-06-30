@@ -63,26 +63,54 @@ export default function GeneratePage() {
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState('')
 
+  async function pollJob(jobId, onDone, onError, startPct, endPct) {
+    return new Promise((resolve, reject) => {
+      const interval = setInterval(async () => {
+        try {
+          const res = await api.get(`/jobs/${jobId}`)
+          const job = res.data
+          if (job.status === 'done') {
+            clearInterval(interval)
+            setProgress(endPct)
+            onDone(job.result)
+            resolve(job.result)
+          } else if (job.status === 'error') {
+            clearInterval(interval)
+            reject(new Error(job.error || 'Generation failed'))
+          } else {
+            // Still processing — animate progress
+            setProgress((p) => Math.min(p + 2, endPct - 5))
+          }
+        } catch (e) {
+          clearInterval(interval)
+          reject(e)
+        }
+      }, 3000)
+    })
+  }
+
   async function handleGenerate() {
     setError('')
     setLoading(true)
     setProgress(0)
 
     try {
-      // Step 1 of 2: Generate RA
+      // Step 1: Start RA generation (returns immediately with job_id)
       setProgressLabel('Step 1 of 2 — AI is generating Risk Assessment…')
-      setProgress(10)
-      const raRes = await api.post('/generate/ra', { mos_text: mosText, project_details: projectDetails }, { timeout: 180000 })
+      setProgress(5)
+      const raStart = await api.post('/generate/ra', { mos_text: mosText, project_details: projectDetails })
+      const raResult = await pollJob(raStart.data.job_id, () => {}, () => {}, 5, 50)
       setProgress(55)
 
-      // Step 2 of 2: Generate SWP
+      // Step 2: Start SWP generation
       setProgressLabel('Step 2 of 2 — AI is generating Safe Work Procedure…')
       setProgress(60)
-      const swpRes = await api.post(`/generate/swp/${raRes.data.generation_id}`, {}, { timeout: 180000 })
+      const swpStart = await api.post(`/generate/swp/${raResult.generation_id}`)
+      const swpResult = await pollJob(swpStart.data.job_id, () => {}, () => {}, 60, 95)
       setProgress(100)
 
-      setGenerationId(raRes.data.generation_id)
-      setRaSWP({ project_type: projectDetails.project_type, ra: raRes.data.ra, swp: swpRes.data.swp })
+      setGenerationId(raResult.generation_id)
+      setRaSWP({ project_type: projectDetails.project_type, ra: raResult.ra, swp: swpResult.swp })
       setStep(2)
     } catch (err) {
       const detail = err.response?.data?.detail || err.message || 'Unknown error'

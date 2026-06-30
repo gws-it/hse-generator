@@ -3,6 +3,8 @@ import io
 import json
 import subprocess
 import tempfile
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -25,6 +27,9 @@ from create_ra import build_ra_docx
 from create_swp import build_swp_docx
 
 app = FastAPI(title="HSE Report Generator", version="1.0.0")
+
+# In-memory job store: {job_id: {status, result, error}}
+jobs: dict = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -132,7 +137,7 @@ def extract_details(
 
 @app.post("/api/generate/ra")
 def generate_ra_step(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Step 1: Generate RA only. Creates a Generation record and returns generation_id."""
+    """Start RA generation in background. Returns job_id immediately."""
     mos_text = body.get("mos_text", "")
     project_details = body.get("project_details", {})
     if not mos_text:
@@ -148,53 +153,88 @@ def generate_ra_step(body: dict, db: Session = Depends(get_db), current_user: Us
     )
     few_shot = [{"project_type": ex.project_type, **ex.ra_swp_json} for ex in examples if ex.ra_swp_json]
 
-    try:
-        ra = _generate_ra(mos_text, project_details, few_shot)
-    except Exception as e:
-        import traceback
-        print(f"[ERROR] RA generation failed: {traceback.format_exc()}")
-        raise HTTPException(500, f"RA generation failed: {e}")
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "processing", "step": "ra", "result": None, "error": None}
 
-    gen = Generation(
-        user_id=current_user.id,
-        project_name=project_details.get("project_name"),
-        project_type=project_type,
-        location=project_details.get("location"),
-        ra_leader=project_details.get("ra_leader"),
-        approved_by=project_details.get("approved_by"),
-        ra_members=project_details.get("ra_members", []),
-        reference_no=project_details.get("reference_no"),
-        company=project_details.get("company"),
-        client=project_details.get("client"),
-        assessment_date=project_details.get("assessment_date", datetime.today().strftime("%d %b %Y")),
-        mos_text=mos_text,
-        ra_swp_json={"project_type": project_type, "ra": ra, "swp": {}},
-        feedback_history=[],
-    )
-    db.add(gen)
-    db.commit()
-    db.refresh(gen)
-    return {"generation_id": gen.id, "ra": ra}
+    def run():
+        try:
+            ra = _generate_ra(mos_text, project_details, few_shot)
+
+            # Save to DB
+            from database import SessionLocal
+            db2 = SessionLocal()
+            try:
+                gen = Generation(
+                    user_id=current_user.id,
+                    project_name=project_details.get("project_name"),
+                    project_type=project_type,
+                    location=project_details.get("location"),
+                    ra_leader=project_details.get("ra_leader"),
+                    approved_by=project_details.get("approved_by"),
+                    ra_members=project_details.get("ra_members", []),
+                    reference_no=project_details.get("reference_no"),
+                    company=project_details.get("company"),
+                    client=project_details.get("client"),
+                    assessment_date=project_details.get("assessment_date", datetime.today().strftime("%d %b %Y")),
+                    mos_text=mos_text,
+                    ra_swp_json={"project_type": project_type, "ra": ra, "swp": {}},
+                    feedback_history=[],
+                )
+                db2.add(gen)
+                db2.commit()
+                db2.refresh(gen)
+                jobs[job_id] = {"status": "done", "step": "ra", "result": {"generation_id": gen.id, "ra": ra}, "error": None}
+            finally:
+                db2.close()
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] RA job {job_id}: {traceback.format_exc()}")
+            jobs[job_id] = {"status": "error", "step": "ra", "result": None, "error": str(e)}
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": "processing"}
 
 
 @app.post("/api/generate/swp/{generation_id}")
 def generate_swp_step(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Step 2: Generate SWP using the saved RA from step 1."""
+    """Start SWP generation in background. Returns job_id immediately."""
     gen = _get_gen(generation_id, current_user, db)
     project_details = _project_details_from_gen(gen)
     ra_activities = gen.ra_swp_json.get("ra", {}).get("activities", [])
+    mos_text = gen.mos_text
 
-    try:
-        swp = _generate_swp(gen.mos_text, project_details, ra_activities)
-    except Exception as e:
-        import traceback
-        print(f"[ERROR] SWP generation failed: {traceback.format_exc()}")
-        raise HTTPException(500, f"SWP generation failed: {e}")
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "processing", "step": "swp", "result": None, "error": None}
 
-    gen.ra_swp_json = {**gen.ra_swp_json, "swp": swp}
-    gen.updated_at = datetime.utcnow()
-    db.commit()
-    return {"generation_id": gen.id, "swp": swp}
+    def run():
+        try:
+            swp = _generate_swp(mos_text, project_details, ra_activities)
+            from database import SessionLocal
+            db2 = SessionLocal()
+            try:
+                g = db2.query(Generation).filter(Generation.id == generation_id).first()
+                g.ra_swp_json = {**g.ra_swp_json, "swp": swp}
+                g.updated_at = datetime.utcnow()
+                db2.commit()
+                jobs[job_id] = {"status": "done", "step": "swp", "result": {"generation_id": generation_id, "swp": swp}, "error": None}
+            finally:
+                db2.close()
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] SWP job {job_id}: {traceback.format_exc()}")
+            jobs[job_id] = {"status": "error", "step": "swp", "result": None, "error": str(e)}
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": "processing"}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Poll job status."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
 
 
 @app.post("/api/generate")
