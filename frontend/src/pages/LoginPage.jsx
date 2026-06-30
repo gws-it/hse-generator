@@ -1,15 +1,23 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const [clientId, setClientId] = useState('')
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (localStorage.getItem('token')) {
       navigate('/generate')
       return
     }
+
+    // Fetch Google Client ID from backend (avoids build-time env var issue)
+    api.get('/config').then((r) => {
+      setClientId(r.data.google_client_id)
+      setLoading(false)
+    }).catch(() => setLoading(false))
 
     window.handleGoogleLogin = async (response) => {
       try {
@@ -23,7 +31,32 @@ export default function LoginPage() {
     }
   }, [navigate])
 
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+  // Initialise Google Sign In once we have the client ID
+  useEffect(() => {
+    if (!clientId) return
+    if (!window.google) {
+      // Wait for the GSI script to load then initialise
+      const interval = setInterval(() => {
+        if (window.google) {
+          clearInterval(interval)
+          initGoogle(clientId)
+        }
+      }, 200)
+      return () => clearInterval(interval)
+    }
+    initGoogle(clientId)
+  }, [clientId])
+
+  function initGoogle(id) {
+    window.google.accounts.id.initialize({
+      client_id: id,
+      callback: window.handleGoogleLogin,
+    })
+    window.google.accounts.id.renderButton(
+      document.getElementById('google-btn'),
+      { theme: 'outline', size: 'large', text: 'sign_in_with', shape: 'rectangular', logo_alignment: 'left' }
+    )
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 to-blue-700">
@@ -43,30 +76,20 @@ export default function LoginPage() {
 
         <div className="border-t border-gray-100 pt-6">
           <p className="text-sm text-gray-600 mb-4">Sign in with your company Google account</p>
-          {clientId ? (
-            <div
-              id="g_id_onload"
-              data-client_id={clientId}
-              data-callback="handleGoogleLogin"
-              data-auto_prompt="false"
-            />
-          ) : null}
-          <div
-            className="g_id_signin flex justify-center"
-            data-type="standard"
-            data-shape="rectangular"
-            data-theme="outline"
-            data-text="sign_in_with"
-            data-size="large"
-            data-logo_alignment="left"
-            data-client_id={clientId}
-            data-callback="handleGoogleLogin"
-          />
-          {!clientId && (
+
+          {loading && (
+            <div className="flex justify-center">
+              <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+
+          {!loading && !clientId && (
             <p className="text-red-500 text-xs mt-3">
-              VITE_GOOGLE_CLIENT_ID not configured. See setup instructions.
+              Google Client ID not configured. Add GOOGLE_CLIENT_ID to Railway environment variables.
             </p>
           )}
+
+          <div id="google-btn" className="flex justify-center mt-2" />
         </div>
 
         <p className="mt-6 text-xs text-gray-400">

@@ -35,6 +35,11 @@ app.add_middleware(
 )
 
 
+@app.get("/api/config")
+def get_config():
+    return {"google_client_id": os.getenv("GOOGLE_CLIENT_ID", "")}
+
+
 @app.on_event("startup")
 def on_startup():
     try:
