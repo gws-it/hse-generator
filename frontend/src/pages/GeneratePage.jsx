@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import api from '../api'
 import ProjectForm from '../components/ProjectForm'
 import RAPreview from '../components/RAPreview'
@@ -58,22 +58,38 @@ export default function GeneratePage() {
     }
   }
 
-  // ── Step 2: Generate ────────────────────────────────────────────────────
+  // ── Step 2: Generate with progress ─────────────────────────────────────
+
+  const [progress, setProgress] = useState(0)
+  const [progressLabel, setProgressLabel] = useState('')
 
   async function handleGenerate() {
     setError('')
     setLoading(true)
-    setLoadingMsg('AI is generating your RA and SWP — this takes 30–60 seconds…')
+    setProgress(0)
+
     try {
-      const res = await api.post('/generate', { mos_text: mosText, project_details: projectDetails })
-      setGenerationId(res.data.generation_id)
-      setRaSWP(res.data.ra_swp)
+      // Step 1 of 2: Generate RA
+      setProgressLabel('Step 1 of 2 — AI is generating Risk Assessment…')
+      setProgress(10)
+      const raRes = await api.post('/generate/ra', { mos_text: mosText, project_details: projectDetails })
+      setProgress(55)
+
+      // Step 2 of 2: Generate SWP
+      setProgressLabel('Step 2 of 2 — AI is generating Safe Work Procedure…')
+      setProgress(60)
+      const swpRes = await api.post(`/generate/swp/${raRes.data.generation_id}`)
+      setProgress(100)
+
+      setGenerationId(raRes.data.generation_id)
+      setRaSWP({ project_type: projectDetails.project_type, ra: raRes.data.ra, swp: swpRes.data.swp })
       setStep(2)
     } catch (err) {
       setError(err.response?.data?.detail || 'Generation failed. Please try again.')
     } finally {
       setLoading(false)
-      setLoadingMsg('')
+      setProgressLabel('')
+      setProgress(0)
     }
   }
 
@@ -137,9 +153,22 @@ export default function GeneratePage() {
       )}
 
       {loading && (
-        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
-          <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-blue-700 text-sm">{loadingMsg}</span>
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+            <span className="text-blue-700 text-sm font-medium">{progressLabel || loadingMsg}</span>
+          </div>
+          {progress > 0 && (
+            <div className="w-full bg-blue-100 rounded-full h-2.5 mt-2">
+              <div
+                className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
+          {progress > 0 && (
+            <p className="text-xs text-blue-500 mt-1 text-right">{progress}%</p>
+          )}
         </div>
       )}
 

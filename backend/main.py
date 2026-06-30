@@ -20,7 +20,7 @@ from database import get_db, init_db
 from models import User, Generation
 from auth import verify_google_token, create_jwt, get_current_user, get_or_create_user
 from parse_mos import parse_file, parse_google_doc
-from generate import extract_project_details, generate_ra_swp
+from generate import extract_project_details, generate_ra_swp, _generate_ra, _generate_swp
 from create_ra import build_ra_docx
 from create_swp import build_swp_docx
 
@@ -130,16 +130,14 @@ def extract_details(
 
 # ── Generate ──────────────────────────────────────────────────────────────
 
-@app.post("/api/generate")
-def generate(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Generate RA and SWP from MOS text + project details."""
+@app.post("/api/generate/ra")
+def generate_ra_step(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Step 1: Generate RA only. Creates a Generation record and returns generation_id."""
     mos_text = body.get("mos_text", "")
     project_details = body.get("project_details", {})
-
     if not mos_text:
         raise HTTPException(400, "mos_text is required")
 
-    # Fetch few-shot examples from DB (same project type)
     project_type = project_details.get("project_type", "")
     examples = (
         db.query(Generation)
@@ -148,11 +146,70 @@ def generate(body: dict, db: Session = Depends(get_db), current_user: User = Dep
         .limit(2)
         .all()
     )
-    few_shot = [
-        {"project_type": ex.project_type, **ex.ra_swp_json}
-        for ex in examples
-        if ex.ra_swp_json
-    ]
+    few_shot = [{"project_type": ex.project_type, **ex.ra_swp_json} for ex in examples if ex.ra_swp_json]
+
+    try:
+        ra = _generate_ra(mos_text, project_details, few_shot)
+    except Exception as e:
+        raise HTTPException(500, f"RA generation failed: {e}")
+
+    gen = Generation(
+        user_id=current_user.id,
+        project_name=project_details.get("project_name"),
+        project_type=project_type,
+        location=project_details.get("location"),
+        ra_leader=project_details.get("ra_leader"),
+        approved_by=project_details.get("approved_by"),
+        ra_members=project_details.get("ra_members", []),
+        reference_no=project_details.get("reference_no"),
+        company=project_details.get("company"),
+        client=project_details.get("client"),
+        assessment_date=project_details.get("assessment_date", datetime.today().strftime("%d %b %Y")),
+        mos_text=mos_text,
+        ra_swp_json={"project_type": project_type, "ra": ra, "swp": {}},
+        feedback_history=[],
+    )
+    db.add(gen)
+    db.commit()
+    db.refresh(gen)
+    return {"generation_id": gen.id, "ra": ra}
+
+
+@app.post("/api/generate/swp/{generation_id}")
+def generate_swp_step(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Step 2: Generate SWP using the saved RA from step 1."""
+    gen = _get_gen(generation_id, current_user, db)
+    project_details = _project_details_from_gen(gen)
+    ra_activities = gen.ra_swp_json.get("ra", {}).get("activities", [])
+
+    try:
+        swp = _generate_swp(gen.mos_text, project_details, ra_activities)
+    except Exception as e:
+        raise HTTPException(500, f"SWP generation failed: {e}")
+
+    gen.ra_swp_json = {**gen.ra_swp_json, "swp": swp}
+    gen.updated_at = datetime.utcnow()
+    db.commit()
+    return {"generation_id": gen.id, "swp": swp}
+
+
+@app.post("/api/generate")
+def generate(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Legacy single-call generate (used by feedback flow)."""
+    mos_text = body.get("mos_text", "")
+    project_details = body.get("project_details", {})
+    if not mos_text:
+        raise HTTPException(400, "mos_text is required")
+
+    project_type = project_details.get("project_type", "")
+    examples = (
+        db.query(Generation)
+        .filter(Generation.project_type == project_type, Generation.ra_swp_json.isnot(None))
+        .order_by(Generation.updated_at.desc())
+        .limit(2)
+        .all()
+    )
+    few_shot = [{"project_type": ex.project_type, **ex.ra_swp_json} for ex in examples if ex.ra_swp_json]
 
     try:
         ra_swp = generate_ra_swp(mos_text, project_details, few_shot_examples=few_shot)
