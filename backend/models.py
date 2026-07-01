@@ -22,9 +22,9 @@ class Template(Base):
     __tablename__ = "templates"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)   # NULL = system/Drive template
     project_type = Column(String(100), nullable=False)
-    label = Column(String(500))          # e.g. "Green Wall - IWMF example"
+    label = Column(String(500))
     mos_text = Column(Text)
     ra_text = Column(Text)               # raw text extracted from uploaded RA
     swp_text = Column(Text)              # raw text extracted from uploaded SWP

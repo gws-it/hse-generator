@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 
-const PROJECT_TYPES = ['Green Wall', 'Green Roof', 'Construction', 'Landscape']
+const TYPE_COLOR = {
+  'Green Wall':   'bg-green-100 text-green-800',
+  'Green Roof':   'bg-emerald-100 text-emerald-800',
+  Construction:   'bg-orange-100 text-orange-800',
+  Landscape:      'bg-lime-100 text-lime-800',
+}
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
-  const [form, setForm] = useState({ project_type: '', label: '' })
-  const [files, setFiles] = useState({ mos: null, ra: null, swp: null })
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [loading, setLoading]     = useState(true)
+  const [syncing, setSyncing]     = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
+  const [error, setError]         = useState('')
 
   useEffect(() => { fetchTemplates() }, [])
 
@@ -23,29 +26,16 @@ export default function TemplatesPage() {
     }
   }
 
-  async function handleUpload(e) {
-    e.preventDefault()
-    if (!form.project_type || !form.label) { setError('Project type and label are required.'); return }
-    if (!files.mos && !files.ra && !files.swp) { setError('Upload at least one file.'); return }
-
-    setError(''); setSuccess(''); setUploading(true)
-    const fd = new FormData()
-    fd.append('project_type', form.project_type)
-    fd.append('label', form.label)
-    if (files.mos)  fd.append('mos_file', files.mos)
-    if (files.ra)   fd.append('ra_file', files.ra)
-    if (files.swp)  fd.append('swp_file', files.swp)
-
+  async function handleSync() {
+    setSyncing(true); setSyncResult(null); setError('')
     try {
-      await api.post('/templates', fd)
-      setSuccess('Template uploaded successfully! AI will use it for future generations.')
-      setForm({ project_type: '', label: '' })
-      setFiles({ mos: null, ra: null, swp: null })
+      const res = await api.post('/drive-sync')
+      setSyncResult(res.data)
       fetchTemplates()
     } catch (err) {
-      setError(err.response?.data?.detail || 'Upload failed.')
+      setError(err.response?.data?.detail || 'Sync failed. Check that GOOGLE_API_KEY or GOOGLE_SERVICE_ACCOUNT_JSON is set in Railway.')
     } finally {
-      setUploading(false)
+      setSyncing(false)
     }
   }
 
@@ -55,92 +45,98 @@ export default function TemplatesPage() {
     fetchTemplates()
   }
 
-  function typeColor(type) {
-    const map = { 'Green Wall': 'bg-green-100 text-green-800', 'Green Roof': 'bg-emerald-100 text-emerald-800', Construction: 'bg-orange-100 text-orange-800', Landscape: 'bg-lime-100 text-lime-800' }
-    return map[type] || 'bg-gray-100 text-gray-700'
-  }
+  const driveTemplates = templates.filter(t => t.label.includes('[Drive]'))
+  const autoTemplates  = templates.filter(t => t.label.includes('[Auto]'))
+  const userTemplates  = templates.filter(t => !t.label.includes('[Drive]') && !t.label.includes('[Auto]'))
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold text-gray-900 mb-1">Template Library</h1>
       <p className="text-gray-500 text-sm mb-6">
-        Upload your existing MOS, RA, and SWP files here. The AI will study them and generate new documents that match your company's style and format.
+        The AI reads your existing MOS, RA, and SWP documents from Google Drive and uses them as examples when generating new reports.
+        Every time your team downloads a generated report, it is automatically saved here so the AI keeps improving.
       </p>
 
-      {/* Upload form */}
-      <div className="card mb-8">
-        <h2 className="text-base font-bold text-gray-800 mb-4">Upload New Template</h2>
-        {error && <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">{error}</div>}
-        {success && <div className="mb-3 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">{success}</div>}
-
-        <form onSubmit={handleUpload} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Project Type *</label>
-              <select className="input" value={form.project_type} onChange={e => setForm({...form, project_type: e.target.value})}>
-                <option value="">— Select —</option>
-                {PROJECT_TYPES.map(t => <option key={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Template Label *</label>
-              <input className="input" placeholder="e.g. IWMF Green Wall Example" value={form.label} onChange={e => setForm({...form, label: e.target.value})} />
-            </div>
+      {/* Drive Sync */}
+      <div className="card mb-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="font-bold text-gray-800">Google Drive Sync</h2>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Reads templates from your Drive folder automatically. Add new project-type subfolders and click Sync to update.
+            </p>
           </div>
+          <button onClick={handleSync} disabled={syncing} className="btn-primary whitespace-nowrap">
+            {syncing ? 'Syncing…' : '↻ Sync from Drive'}
+          </button>
+        </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              { key: 'mos', label: 'MOS File', color: 'blue', desc: 'Method Statement' },
-              { key: 'ra',  label: 'RA File',  color: 'orange', desc: 'Risk Assessment' },
-              { key: 'swp', label: 'SWP File', color: 'green', desc: 'Safe Work Procedure' },
-            ].map(({ key, label, color, desc }) => (
-              <div key={key} className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition
-                ${files[key] ? `border-${color}-400 bg-${color}-50` : 'border-gray-200 hover:border-gray-400'}`}
-                onClick={() => document.getElementById(`file-${key}`).click()}>
-                <input id={`file-${key}`} type="file" accept=".pdf,.docx" className="hidden"
-                  onChange={e => setFiles({...files, [key]: e.target.files[0]})} />
-                <p className="font-semibold text-sm text-gray-700">{label}</p>
-                <p className="text-xs text-gray-400">{desc}</p>
-                {files[key]
-                  ? <p className="text-xs text-green-600 mt-1 truncate">✓ {files[key].name}</p>
-                  : <p className="text-xs text-gray-400 mt-1">PDF or DOCX</p>}
+        {error && <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">{error}</div>}
+
+        {syncResult && (
+          <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded text-sm text-green-800">
+            {syncResult.count > 0
+              ? <>Synced {syncResult.count} template{syncResult.count > 1 ? 's' : ''}: {syncResult.synced.map(s => s.project_type).join(', ')}</>
+              : 'No matching subfolders found. Make sure your Drive folder has subfolders named: Green Wall, Green Roof, Construction, Landscape.'}
+          </div>
+        )}
+
+        <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-700 space-y-1">
+          <p><strong>Drive folder structure required:</strong></p>
+          <p className="font-mono">📁 Your Template Folder/<br/>
+            &nbsp;&nbsp;📁 Green Wall/<br/>
+            &nbsp;&nbsp;&nbsp;&nbsp;📄 [MOS file].docx<br/>
+            &nbsp;&nbsp;&nbsp;&nbsp;📄 [RA file].docx<br/>
+            &nbsp;&nbsp;&nbsp;&nbsp;📄 [SWP file].docx<br/>
+            &nbsp;&nbsp;📁 Green Roof/<br/>
+            &nbsp;&nbsp;📁 Construction/<br/>
+            &nbsp;&nbsp;📁 Landscape/</p>
+          <p className="mt-1">File names containing "MOS/method", "RA/risk", "SWP/safe" are auto-detected.</p>
+        </div>
+      </div>
+
+      {/* Template sections */}
+      {loading && <p className="text-gray-400 text-sm">Loading…</p>}
+
+      {!loading && (
+        <>
+          <Section title="From Google Drive" items={driveTemplates} onDelete={handleDelete} emptyText="No Drive templates yet — click Sync above." />
+          <Section title="Auto-saved (downloaded reports)" items={autoTemplates} onDelete={handleDelete} emptyText="Will appear here after your team downloads generated reports." />
+          {userTemplates.length > 0 && <Section title="Manually uploaded" items={userTemplates} onDelete={handleDelete} />}
+        </>
+      )}
+    </div>
+  )
+}
+
+function Section({ title, items, onDelete, emptyText }) {
+  return (
+    <div className="mb-6">
+      <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">{title} ({items.length})</h2>
+      {items.length === 0
+        ? <p className="text-gray-400 text-sm italic">{emptyText}</p>
+        : (
+          <div className="space-y-2">
+            {items.map(t => (
+              <div key={t.id} className="card flex items-center gap-4 py-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-gray-800 text-sm">{t.label}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${TYPE_COLOR[t.project_type] || 'bg-gray-100 text-gray-700'}`}>{t.project_type}</span>
+                  </div>
+                  <div className="flex gap-3 mt-0.5">
+                    {t.has_mos && <span className="text-xs text-blue-500">✓ MOS</span>}
+                    {t.has_ra  && <span className="text-xs text-orange-500">✓ RA</span>}
+                    {t.has_swp && <span className="text-xs text-green-500">✓ SWP</span>}
+                    <span className="text-xs text-gray-400">{new Date(t.created_at).toLocaleDateString()}</span>
+                  </div>
+                </div>
+                <button onClick={() => onDelete(t.id)} className="text-red-300 hover:text-red-500 text-xs transition">Remove</button>
               </div>
             ))}
           </div>
-
-          <button type="submit" disabled={uploading} className="btn-primary">
-            {uploading ? 'Uploading…' : 'Upload Template'}
-          </button>
-        </form>
-      </div>
-
-      {/* Template list */}
-      <h2 className="text-base font-bold text-gray-800 mb-3">Saved Templates ({templates.length})</h2>
-      {loading && <p className="text-gray-400 text-sm">Loading…</p>}
-      {!loading && templates.length === 0 && (
-        <div className="card text-center py-10 text-gray-400 text-sm">
-          No templates yet. Upload your first example above.
-        </div>
-      )}
-      <div className="space-y-3">
-        {templates.map(t => (
-          <div key={t.id} className="card flex items-center gap-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-semibold text-gray-800">{t.label}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${typeColor(t.project_type)}`}>{t.project_type}</span>
-              </div>
-              <div className="flex gap-3 mt-1">
-                {t.has_mos && <span className="text-xs text-blue-600">✓ MOS</span>}
-                {t.has_ra  && <span className="text-xs text-orange-600">✓ RA</span>}
-                {t.has_swp && <span className="text-xs text-green-600">✓ SWP</span>}
-                <span className="text-xs text-gray-400">{new Date(t.created_at).toLocaleDateString()}</span>
-              </div>
-            </div>
-            <button onClick={() => handleDelete(t.id)} className="text-red-400 hover:text-red-600 text-sm transition">Delete</button>
-          </div>
-        ))}
-      </div>
+        )
+      }
     </div>
   )
 }

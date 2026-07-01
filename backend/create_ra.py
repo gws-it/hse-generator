@@ -41,7 +41,7 @@ def _rpn_color(rpn: int) -> str:
         return "FF0000"   # red
 
 
-def build_ra_docx(project_details: dict, ra_data: dict) -> bytes:
+def build_ra_docx(project_details: dict, ra_data: dict, logo_bytes: bytes = None) -> bytes:
     doc = Document()
 
     # Page margins
@@ -54,7 +54,13 @@ def build_ra_docx(project_details: dict, ra_data: dict) -> bytes:
         section.bottom_margin = Cm(1.5)
         section.orientation = 1  # landscape
 
-    # ── Title ──────────────────────────────────────────────────────────────
+    # ── Logo + Title ───────────────────────────────────────────────────────
+    if logo_bytes:
+        logo_para = doc.add_paragraph()
+        logo_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_logo = logo_para.add_run()
+        run_logo.add_picture(io.BytesIO(logo_bytes), height=Cm(1.8))
+
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run("EHS RISK ASSESSMENT")

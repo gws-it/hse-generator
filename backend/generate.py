@@ -196,6 +196,7 @@ Instructions:
 
 
 def _generate_swp(mos_text: str, project_details: dict, ra_activities: list,
+                  few_shot_examples: list = None,
                   feedback: str = None, previous_swp: dict = None) -> dict:
 
     swp_template_block = ""
@@ -240,6 +241,6 @@ def generate_ra_swp(mos_text: str, project_details: dict, few_shot_examples: lis
     prev_swp = previous_output.get("swp") if previous_output else None
 
     ra = _generate_ra(mos_text, project_details, few_shot_examples, feedback, prev_ra)
-    swp = _generate_swp(mos_text, project_details, ra.get("activities", []), feedback, prev_swp)
+    swp = _generate_swp(mos_text, project_details, ra.get("activities", []), few_shot_examples, feedback, prev_swp)
 
     return {"project_type": project_details.get("project_type", ""), "ra": ra, "swp": swp}

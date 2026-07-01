@@ -25,6 +25,7 @@ from parse_mos import parse_file, parse_google_doc
 from generate import extract_project_details, generate_ra_swp, _generate_ra, _generate_swp
 from create_ra import build_ra_docx
 from create_swp import build_swp_docx
+import drive_sync
 
 app = FastAPI(title="HSE Report Generator", version="1.0.0")
 
@@ -52,6 +53,29 @@ def on_startup():
     except Exception as e:
         print(f"[WARNING] Database init failed: {e}")
         print("[WARNING] App will start but DB features won't work until DATABASE_URL is correct.")
+        return
+
+    # Pre-load logo cache
+    try:
+        drive_sync.get_logo_bytes()
+    except Exception as e:
+        print(f"[WARNING] Logo preload failed: {e}")
+
+    # Auto-sync Drive templates (runs in background so startup is fast)
+    def _bg_sync():
+        try:
+            from database import SessionLocal
+            db = SessionLocal()
+            synced = drive_sync.sync_templates(db)
+            db.close()
+            if synced:
+                print(f"[Drive] Synced templates: {[s['project_type'] for s in synced]}")
+            else:
+                print("[Drive] No templates synced (check GOOGLE_API_KEY or GOOGLE_SERVICE_ACCOUNT_JSON)")
+        except Exception as e:
+            print(f"[Drive] Background sync failed: {e}")
+
+    threading.Thread(target=_bg_sync, daemon=True).start()
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────
@@ -201,12 +225,18 @@ def generate_swp_step(generation_id: int, db: Session = Depends(get_db), current
     ra_activities = gen.ra_swp_json.get("ra", {}).get("activities", [])
     mos_text = gen.mos_text
 
+    # Load Drive/uploaded templates for this project type
+    tmpls = db.query(Template).filter(Template.project_type == gen.project_type).order_by(Template.created_at.desc()).limit(2).all()
+    template_examples = [{"project_type": t.project_type, "label": t.label,
+                          "mos_text": t.mos_text, "ra_text": t.ra_text, "swp_text": t.swp_text}
+                         for t in tmpls]
+
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "processing", "step": "swp", "result": None, "error": None}
 
     def run():
         try:
-            swp = _generate_swp(mos_text, project_details, ra_activities)
+            swp = _generate_swp(mos_text, project_details, ra_activities, template_examples)
             from database import SessionLocal
             db2 = SessionLocal()
             try:
@@ -359,8 +389,10 @@ def _project_details_from_gen(gen: Generation) -> dict:
 @app.get("/api/download/{generation_id}/ra/docx")
 def download_ra_docx(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     gen = _get_gen(generation_id, current_user, db)
-    docx_bytes = build_ra_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("ra", {}))
+    logo = drive_sync.get_logo_bytes()
+    docx_bytes = build_ra_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("ra", {}), logo)
     fname = f"RA_{gen.project_name or 'report'}.docx".replace(" ", "_")
+    _auto_save_template(gen, db)
     return StreamingResponse(
         io.BytesIO(docx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -371,8 +403,10 @@ def download_ra_docx(generation_id: int, db: Session = Depends(get_db), current_
 @app.get("/api/download/{generation_id}/swp/docx")
 def download_swp_docx(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     gen = _get_gen(generation_id, current_user, db)
-    docx_bytes = build_swp_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("swp", {}))
+    logo = drive_sync.get_logo_bytes()
+    docx_bytes = build_swp_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("swp", {}), logo)
     fname = f"SWP_{gen.project_name or 'report'}.docx".replace(" ", "_")
+    _auto_save_template(gen, db)
     return StreamingResponse(
         io.BytesIO(docx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -383,9 +417,11 @@ def download_swp_docx(generation_id: int, db: Session = Depends(get_db), current
 @app.get("/api/download/{generation_id}/ra/pdf")
 def download_ra_pdf(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     gen = _get_gen(generation_id, current_user, db)
-    docx_bytes = build_ra_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("ra", {}))
+    logo = drive_sync.get_logo_bytes()
+    docx_bytes = build_ra_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("ra", {}), logo)
     pdf_bytes = _convert_to_pdf(docx_bytes)
     fname = f"RA_{gen.project_name or 'report'}.pdf".replace(" ", "_")
+    _auto_save_template(gen, db)
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
@@ -396,14 +432,43 @@ def download_ra_pdf(generation_id: int, db: Session = Depends(get_db), current_u
 @app.get("/api/download/{generation_id}/swp/pdf")
 def download_swp_pdf(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     gen = _get_gen(generation_id, current_user, db)
-    docx_bytes = build_swp_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("swp", {}))
+    logo = drive_sync.get_logo_bytes()
+    docx_bytes = build_swp_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("swp", {}), logo)
     pdf_bytes = _convert_to_pdf(docx_bytes)
     fname = f"SWP_{gen.project_name or 'report'}.pdf".replace(" ", "_")
+    _auto_save_template(gen, db)
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+def _auto_save_template(gen: Generation, db: Session):
+    """When user downloads, auto-save this generation as a template for AI learning."""
+    if not gen.ra_swp_json:
+        return
+    try:
+        existing = db.query(Template).filter(
+            Template.project_type == gen.project_type,
+            Template.label == f"[Auto] {gen.project_name}",
+        ).first()
+        if existing:
+            return  # already saved
+
+        ra_text = json.dumps(gen.ra_swp_json.get("ra", {}), indent=2)
+        swp_text = json.dumps(gen.ra_swp_json.get("swp", {}), indent=2)
+        db.add(Template(
+            user_id=gen.user_id,
+            project_type=gen.project_type,
+            label=f"[Auto] {gen.project_name}",
+            mos_text=gen.mos_text[:5000] if gen.mos_text else "",
+            ra_text=ra_text[:8000],
+            swp_text=swp_text[:8000],
+        ))
+        db.commit()
+    except Exception as e:
+        print(f"[WARNING] Auto-save template failed: {e}")
 
 
 def _convert_to_pdf(docx_bytes: bytes) -> bytes:
@@ -418,6 +483,20 @@ def _convert_to_pdf(docx_bytes: bytes) -> bytes:
         pdf_path = os.path.join(tmpdir, "doc.pdf")
         with open(pdf_path, "rb") as f:
             return f.read()
+
+
+# ── Drive Sync ────────────────────────────────────────────────────────────
+
+@app.post("/api/drive-sync")
+def trigger_drive_sync(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Manually trigger a re-sync of templates from Google Drive."""
+    try:
+        synced = drive_sync.sync_templates(db)
+        drive_sync._logo_cache = None  # refresh logo too
+        drive_sync.get_logo_bytes()
+        return {"synced": synced, "count": len(synced)}
+    except Exception as e:
+        raise HTTPException(500, f"Drive sync failed: {e}")
 
 
 # ── Templates ─────────────────────────────────────────────────────────────

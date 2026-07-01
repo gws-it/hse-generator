@@ -1,6 +1,7 @@
 """Build the Safe Work Procedure DOCX document."""
 import io
 from datetime import datetime
+
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -42,7 +43,7 @@ def _body(doc, text: str, indent: bool = False):
     return p
 
 
-def build_swp_docx(project_details: dict, swp_data: dict) -> bytes:
+def build_swp_docx(project_details: dict, swp_data: dict, logo_bytes: bytes = None) -> bytes:
     doc = Document()
 
     for section in doc.sections:
@@ -51,7 +52,13 @@ def build_swp_docx(project_details: dict, swp_data: dict) -> bytes:
         section.top_margin = Cm(2)
         section.bottom_margin = Cm(2)
 
-    # ── Title block ────────────────────────────────────────────────────────
+    # ── Logo + Title block ─────────────────────────────────────────────────
+    if logo_bytes:
+        logo_para = doc.add_paragraph()
+        logo_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_logo = logo_para.add_run()
+        run_logo.add_picture(io.BytesIO(logo_bytes), height=Cm(1.8))
+
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = title.add_run("SAFE WORK PROCEDURE")
