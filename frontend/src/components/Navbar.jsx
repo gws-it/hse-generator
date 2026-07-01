@@ -14,7 +14,7 @@ export default function Navbar() {
     <nav className="bg-blue-900 text-white shadow-lg">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
-          <span className="font-bold text-lg tracking-tight">HSE Report Generator</span>
+          <span className="font-bold text-lg tracking-tight">WHSE Report Generator</span>
           <Link to="/generate" className="text-blue-200 hover:text-white text-sm transition">
             Generate
           </Link>
