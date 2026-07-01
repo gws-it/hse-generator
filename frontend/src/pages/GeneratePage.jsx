@@ -141,11 +141,18 @@ export default function GeneratePage() {
 
   // ── Download helpers ────────────────────────────────────────────────────
 
-  function download(url, filename) {
-    const a = document.createElement('a')
-    a.href = `/api/download/${generationId}/${url}?token=${localStorage.getItem('token')}`
-    a.download = filename
-    a.click()
+  async function download(doc, fmt, filename) {
+    try {
+      const res = await api.get(`/download/${generationId}/${doc}/${fmt}`, { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      alert('Download failed. Please try again.')
+    }
   }
 
   // ── Drag & drop ─────────────────────────────────────────────────────────
@@ -284,10 +291,10 @@ export default function GeneratePage() {
               <p className="text-sm text-gray-500">{projectDetails.project_type} · {projectDetails.location}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => download('ra/docx', 'RA.docx')} className="btn-secondary text-sm">⬇ RA (Word)</button>
-              <button onClick={() => download('ra/pdf', 'RA.pdf')} className="btn-secondary text-sm">⬇ RA (PDF)</button>
-              <button onClick={() => download('swp/docx', 'SWP.docx')} className="btn-green text-sm">⬇ SWP (Word)</button>
-              <button onClick={() => download('swp/pdf', 'SWP.pdf')} className="btn-green text-sm">⬇ SWP (PDF)</button>
+              <button onClick={() => download('ra', 'docx', `RA_${projectDetails.project_name||'report'}.docx`)} className="btn-secondary text-sm">⬇ RA (Word)</button>
+              <button onClick={() => download('ra', 'pdf',  `RA_${projectDetails.project_name||'report'}.pdf`)}  className="btn-secondary text-sm">⬇ RA (PDF)</button>
+              <button onClick={() => download('swp','docx', `SWP_${projectDetails.project_name||'report'}.docx`)} className="btn-green text-sm">⬇ SWP (Word)</button>
+              <button onClick={() => download('swp','pdf',  `SWP_${projectDetails.project_name||'report'}.pdf`)}  className="btn-green text-sm">⬇ SWP (PDF)</button>
             </div>
           </div>
 

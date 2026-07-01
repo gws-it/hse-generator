@@ -16,10 +16,16 @@ export default function HistoryPage() {
     return map[type] || 'bg-gray-100 text-gray-700'
   }
 
-  function download(id, doc, fmt) {
-    const a = document.createElement('a')
-    a.href = `/api/download/${id}/${doc}/${fmt}`
-    a.click()
+  async function download(id, doc, fmt, name) {
+    try {
+      const res = await api.get(`/download/${id}/${doc}/${fmt}`, { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${doc.toUpperCase()}_${name||'report'}.${fmt}`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch { alert('Download failed.') }
   }
 
   return (
@@ -52,10 +58,10 @@ export default function HistoryPage() {
               <p className="text-sm text-gray-500 mt-0.5">{gen.location} · {new Date(gen.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => download(gen.id, 'ra', 'docx')} className="btn-secondary text-xs py-1">⬇ RA (Word)</button>
-              <button onClick={() => download(gen.id, 'ra', 'pdf')} className="btn-secondary text-xs py-1">⬇ RA (PDF)</button>
-              <button onClick={() => download(gen.id, 'swp', 'docx')} className="btn-green text-xs py-1">⬇ SWP (Word)</button>
-              <button onClick={() => download(gen.id, 'swp', 'pdf')} className="btn-green text-xs py-1">⬇ SWP (PDF)</button>
+              <button onClick={() => download(gen.id,'ra','docx',gen.project_name)} className="btn-secondary text-xs py-1">⬇ RA (Word)</button>
+              <button onClick={() => download(gen.id,'ra','pdf', gen.project_name)} className="btn-secondary text-xs py-1">⬇ RA (PDF)</button>
+              <button onClick={() => download(gen.id,'swp','docx',gen.project_name)} className="btn-green text-xs py-1">⬇ SWP (Word)</button>
+              <button onClick={() => download(gen.id,'swp','pdf', gen.project_name)} className="btn-green text-xs py-1">⬇ SWP (PDF)</button>
             </div>
           </div>
         ))}

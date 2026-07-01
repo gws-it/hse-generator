@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import GeneratePage from './pages/GeneratePage'
 import HistoryPage from './pages/HistoryPage'
+import TemplatesPage from './pages/TemplatesPage'
 import Navbar from './components/Navbar'
 
 function PrivateRoute({ children }) {
@@ -29,6 +30,15 @@ export default function App() {
             <PrivateRoute>
               <Navbar />
               <HistoryPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/templates"
+          element={
+            <PrivateRoute>
+              <Navbar />
+              <TemplatesPage />
             </PrivateRoute>
           }
         />

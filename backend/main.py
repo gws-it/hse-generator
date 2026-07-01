@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from database import get_db, init_db
-from models import User, Generation
+from models import User, Generation, Template
 from auth import verify_google_token, create_jwt, get_current_user, get_or_create_user
 from parse_mos import parse_file, parse_google_doc
 from generate import extract_project_details, generate_ra_swp, _generate_ra, _generate_swp
@@ -144,21 +144,19 @@ def generate_ra_step(body: dict, db: Session = Depends(get_db), current_user: Us
         raise HTTPException(400, "mos_text is required")
 
     project_type = project_details.get("project_type", "")
-    examples = (
-        db.query(Generation)
-        .filter(Generation.project_type == project_type, Generation.ra_swp_json.isnot(None))
-        .order_by(Generation.updated_at.desc())
-        .limit(2)
-        .all()
-    )
-    few_shot = [{"project_type": ex.project_type, **ex.ra_swp_json} for ex in examples if ex.ra_swp_json]
+
+    # Load uploaded templates for this project type
+    tmpls = db.query(Template).filter(Template.project_type == project_type).order_by(Template.created_at.desc()).limit(2).all()
+    template_examples = [{"project_type": t.project_type, "label": t.label,
+                          "mos_text": t.mos_text, "ra_text": t.ra_text, "swp_text": t.swp_text}
+                         for t in tmpls]
 
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "processing", "step": "ra", "result": None, "error": None}
 
     def run():
         try:
-            ra = _generate_ra(mos_text, project_details, few_shot)
+            ra = _generate_ra(mos_text, project_details, template_examples)
 
             # Save to DB
             from database import SessionLocal
@@ -420,6 +418,63 @@ def _convert_to_pdf(docx_bytes: bytes) -> bytes:
         pdf_path = os.path.join(tmpdir, "doc.pdf")
         with open(pdf_path, "rb") as f:
             return f.read()
+
+
+# ── Templates ─────────────────────────────────────────────────────────────
+
+@app.post("/api/templates")
+async def upload_template(
+    project_type: str = Form(...),
+    label: str = Form(...),
+    mos_file: Optional[UploadFile] = File(None),
+    ra_file: Optional[UploadFile] = File(None),
+    swp_file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    async def read_file(f):
+        if not f:
+            return ""
+        content = await f.read()
+        try:
+            return parse_file(content, f.filename)
+        except Exception:
+            return content.decode("utf-8", errors="ignore")
+
+    mos_text = await read_file(mos_file)
+    ra_text = await read_file(ra_file)
+    swp_text = await read_file(swp_file)
+
+    tmpl = Template(
+        user_id=current_user.id,
+        project_type=project_type,
+        label=label,
+        mos_text=mos_text,
+        ra_text=ra_text,
+        swp_text=swp_text,
+    )
+    db.add(tmpl)
+    db.commit()
+    db.refresh(tmpl)
+    return {"id": tmpl.id, "label": tmpl.label, "project_type": tmpl.project_type}
+
+
+@app.get("/api/templates")
+def list_templates(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    templates = db.query(Template).order_by(Template.created_at.desc()).all()
+    return [{"id": t.id, "project_type": t.project_type, "label": t.label,
+             "has_mos": bool(t.mos_text), "has_ra": bool(t.ra_text), "has_swp": bool(t.swp_text),
+             "created_at": t.created_at.isoformat()} for t in templates]
+
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(template_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    tmpl = db.query(Template).filter(Template.id == template_id).first()
+    if not tmpl:
+        raise HTTPException(404, "Template not found")
+    db.delete(tmpl)
+    db.commit()
+    return {"ok": True}
 
 
 # ── History ───────────────────────────────────────────────────────────────

@@ -17,6 +17,20 @@ class User(Base):
     generations = relationship("Generation", back_populates="user")
 
 
+class Template(Base):
+    """Stores example MOS+RA+SWP pairs uploaded by the team for AI to learn from."""
+    __tablename__ = "templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    project_type = Column(String(100), nullable=False)
+    label = Column(String(500))          # e.g. "Green Wall - IWMF example"
+    mos_text = Column(Text)
+    ra_text = Column(Text)               # raw text extracted from uploaded RA
+    swp_text = Column(Text)              # raw text extracted from uploaded SWP
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Generation(Base):
     __tablename__ = "generations"
 

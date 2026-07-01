@@ -161,9 +161,14 @@ def _generate_ra(mos_text: str, project_details: dict, few_shot_examples: list =
 
     few_shot_block = ""
     if few_shot_examples:
-        for ex in few_shot_examples[:1]:
-            snippet = json.dumps(ex.get("ra", {}), indent=2)[:2000]
-            few_shot_block = f"\n\nReference example ({ex.get('project_type','')}):\n{snippet}\n"
+        ex = few_shot_examples[0]
+        parts = []
+        if ex.get("mos_text"):
+            parts.append(f"EXAMPLE MOS:\n{ex['mos_text'][:1500]}")
+        if ex.get("ra_text"):
+            parts.append(f"EXAMPLE RA OUTPUT:\n{ex['ra_text'][:2000]}")
+        if parts:
+            few_shot_block = f"\n\n--- TEMPLATE EXAMPLE ({ex.get('label','')}) ---\n" + "\n\n".join(parts) + "\n--- END TEMPLATE ---\n\nMatch the style, detail level, and structure of the example above.\n"
 
     feedback_block = ""
     if feedback and previous_ra:
@@ -193,6 +198,12 @@ Instructions:
 def _generate_swp(mos_text: str, project_details: dict, ra_activities: list,
                   feedback: str = None, previous_swp: dict = None) -> dict:
 
+    swp_template_block = ""
+    if few_shot_examples:
+        ex = few_shot_examples[0] if isinstance(few_shot_examples, list) else None
+        if ex and ex.get("swp_text"):
+            swp_template_block = f"\n\n--- TEMPLATE EXAMPLE ---\nEXAMPLE SWP OUTPUT:\n{ex['swp_text'][:2000]}\n--- END TEMPLATE ---\n\nMatch the style and detail level of the example above.\n"
+
     feedback_block = ""
     if feedback and previous_swp:
         feedback_block = f"\n\nUSER FEEDBACK TO FIX:\n{feedback}\n\nPREVIOUS SWP:\n{json.dumps(previous_swp, indent=2)[:3000]}\n"
@@ -206,7 +217,7 @@ def _generate_swp(mos_text: str, project_details: dict, ra_activities: list,
 PROJECT: {project_details.get('project_name','')}
 Type: {project_details.get('project_type','')}
 Location: {project_details.get('location','')}
-{feedback_block}
+{swp_template_block}{feedback_block}
 ACTIVITIES TO COVER:
 {json.dumps(activity_names, indent=2)}
 

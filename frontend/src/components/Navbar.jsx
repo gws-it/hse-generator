@@ -21,6 +21,9 @@ export default function Navbar() {
           <Link to="/history" className="text-blue-200 hover:text-white text-sm transition">
             History
           </Link>
+          <Link to="/templates" className="text-blue-200 hover:text-white text-sm transition">
+            Templates
+          </Link>
         </div>
         <div className="flex items-center gap-3">
           {user.picture && (
