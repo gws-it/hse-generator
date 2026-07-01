@@ -124,9 +124,9 @@ EXTRACT_TOOL = {
 }
 
 
-def _call_tool(system: str, user_msg: str, tool: dict, max_tokens: int = 8192) -> dict:
+def _call_tool(system: str, user_msg: str, tool: dict, max_tokens: int = 16000) -> dict:
     """Call Claude with tool_use forced — guarantees valid structured output."""
-    response = client.messages.create(
+    kwargs = dict(
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
         system=system,
@@ -134,8 +134,16 @@ def _call_tool(system: str, user_msg: str, tool: dict, max_tokens: int = 8192) -
         tool_choice={"type": "tool", "name": tool["name"]},
         messages=[{"role": "user", "content": user_msg}],
     )
+    try:
+        # Try extended output (supports up to 64K tokens on compatible models)
+        response = client.messages.create(**kwargs, betas=["output-128k-2025-02-19"])
+    except Exception:
+        # Fall back to standard 8192 if model doesn't support extended output
+        kwargs["max_tokens"] = 8192
+        response = client.messages.create(**kwargs)
+
     if response.stop_reason == "max_tokens":
-        print(f"[WARNING] Claude hit max_tokens limit ({max_tokens}) — output was truncated")
+        print(f"[WARNING] Claude hit max_tokens limit — output truncated, activities may be empty")
     for block in response.content:
         if block.type == "tool_use":
             return block.input
