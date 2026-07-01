@@ -156,43 +156,77 @@ METHOD STATEMENT:
     )
 
 
-def _generate_ra(mos_text: str, project_details: dict, few_shot_examples: list = None,
-                 feedback: str = None, previous_ra: dict = None) -> dict:
-
+def _build_ra_prompt(mos_text: str, project_details: dict,
+                     few_shot_examples: list = None,
+                     feedback: str = None, previous_ra: dict = None) -> str:
     few_shot_block = ""
     if few_shot_examples:
         ex = few_shot_examples[0]
         parts = []
         if ex.get("mos_text"):
-            parts.append(f"EXAMPLE MOS:\n{ex['mos_text'][:1500]}")
+            parts.append(f"EXAMPLE MOS:\n{ex['mos_text'][:1000]}")
         if ex.get("ra_text"):
-            parts.append(f"EXAMPLE RA OUTPUT:\n{ex['ra_text'][:2000]}")
+            parts.append(f"EXAMPLE RA STRUCTURE:\n{ex['ra_text'][:1500]}")
         if parts:
-            few_shot_block = f"\n\n--- TEMPLATE EXAMPLE ({ex.get('label','')}) ---\n" + "\n\n".join(parts) + "\n--- END TEMPLATE ---\n\nMatch the style, detail level, and structure of the example above.\n"
+            few_shot_block = (
+                f"\n\n--- REFERENCE EXAMPLE ({ex.get('label','')}) ---\n"
+                + "\n\n".join(parts)
+                + "\n--- END REFERENCE ---\n"
+            )
 
+    # Only include previous RA as context if it actually has activities
     feedback_block = ""
-    if feedback and previous_ra:
-        feedback_block = f"\n\nUSER FEEDBACK TO FIX:\n{feedback}\n\nPREVIOUS RA:\n{json.dumps(previous_ra, indent=2)[:3000]}\n"
+    prev_activities = (previous_ra or {}).get("activities", [])
+    if feedback and prev_activities:
+        feedback_block = (
+            f"\n\nUSER FEEDBACK TO FIX:\n{feedback}\n\n"
+            f"PREVIOUS RA (fix the issues described above):\n"
+            f"{json.dumps(previous_ra, indent=2)[:3000]}\n"
+        )
+    elif feedback:
+        feedback_block = f"\n\nUSER FEEDBACK: {feedback}\n"
 
-    return _call_tool(
-        system=SYSTEM_PROMPT,
-        user_msg=f"""Generate a complete Risk Assessment for ALL activities in this Method Statement.
+    return f"""Generate a complete Risk Assessment for EVERY work activity in this Method Statement.
+You MUST populate the activities array — do not return an empty list.
 
-PROJECT: {project_details.get('project_name','')}
-Type: {project_details.get('project_type','')}
-Location: {project_details.get('location','')}
+PROJECT: {project_details.get('project_name', '')}
+Type: {project_details.get('project_type', '')}
+Location: {project_details.get('location', '')}
 {few_shot_block}{feedback_block}
 METHOD STATEMENT:
 {mos_text[:8000]}
 
-Instructions:
-- Include every activity from the MOS work sequence
-- Last activity must be SGSecure / Emergency Preparedness
-- Initial RPN must be higher than residual RPN
-- Be specific to the project type and activities described""",
-        tool=RA_TOOL,
-        max_tokens=8192,
-    )
+Rules:
+- activities array must NOT be empty
+- Include every distinct work activity from the MOS
+- Last entry must be SGSecure / Emergency Preparedness
+- initial_rpn must be > residual_rpn
+- Be specific — name actual hazards, actual equipment, actual injuries"""
+
+
+def _generate_ra(mos_text: str, project_details: dict, few_shot_examples: list = None,
+                 feedback: str = None, previous_ra: dict = None) -> dict:
+
+    prompt = _build_ra_prompt(mos_text, project_details, few_shot_examples, feedback, previous_ra)
+    result = _call_tool(system=SYSTEM_PROMPT, user_msg=prompt, tool=RA_TOOL, max_tokens=8192)
+
+    # Retry once with a simpler prompt if Claude returned empty activities
+    if not result.get("activities"):
+        print("[WARNING] RA returned empty activities — retrying with simplified prompt")
+        simple_prompt = f"""Generate a Risk Assessment for this project. The activities array MUST be filled in.
+
+PROJECT: {project_details.get('project_name', '')} ({project_details.get('project_type', '')})
+
+METHOD STATEMENT SUMMARY:
+{mos_text[:5000]}
+
+Fill in at least 10 activities covering the work described above. Do not return an empty activities list."""
+        result = _call_tool(system=SYSTEM_PROMPT, user_msg=simple_prompt, tool=RA_TOOL, max_tokens=8192)
+
+    if not result.get("activities"):
+        raise ValueError("AI returned no activities after retry. Please try again.")
+
+    return result
 
 
 def _generate_swp(mos_text: str, project_details: dict, ra_activities: list,

@@ -446,6 +446,9 @@ def _auto_save_template(gen: Generation, db: Session):
     """When user downloads, auto-save this generation as a template for AI learning."""
     if not gen.ra_swp_json:
         return
+    # Don't save if RA has no activities — empty template would mislead future generations
+    if not gen.ra_swp_json.get("ra", {}).get("activities"):
+        return
     try:
         existing = db.query(Template).filter(
             Template.project_type == gen.project_type,
