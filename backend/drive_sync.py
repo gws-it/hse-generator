@@ -19,6 +19,17 @@ TYPE_MAP = {
     "landscape": "Landscape",
 }
 
+# Known file IDs from the GWS template Drive folder.
+# These are used as a fallback when the API cannot list folder contents
+# (e.g. "Anyone with link" sharing doesn't support API key listing).
+KNOWN_TEMPLATES = {
+    "Green Wall": [
+        {"id": "1yVkYxep-779Z4RAaFmC82k-UciGzja5R", "name": "IWMF - GWS Green Wall MOS_rev.1.docx"},
+        {"id": "1rSKmbxD2ngWo_4Hjs-RGGtzWAEZ_qKJm", "name": "IWMF_GWS_RA (1).docx"},
+        {"id": "1Glf_LthyoyB_TgkvYkbhYsfkeqEvauHg", "name": "IWMF - SWP - Green wall (Rev_0).docx"},
+    ],
+}
+
 # In-memory logo cache
 _logo_cache: bytes | None = None
 
@@ -164,81 +175,91 @@ def upload_approved(project_type: str, project_name: str, ra_bytes: bytes, swp_b
         logger.info(f"Drive: uploaded {filename} to {project_type}/")
 
 
-def sync_templates(db) -> list[dict]:
-    """
-    Scan Drive template folder subfolders, download MOS/RA/SWP files, and
-    upsert into the Template table. Returns list of synced project types.
-    """
+def _sync_project_type(project_type: str, files: list[dict], db, creds, api_key: str) -> bool:
+    """Download files for one project type and upsert into Template table."""
     from models import Template
     from parse_mos import parse_file
 
+    mos_text = ra_text = swp_text = ""
+    for f in files:
+        name_lower = f["name"].lower()
+        try:
+            content = _download(f["id"], creds, api_key)
+            try:
+                text = parse_file(content, f["name"])
+            except Exception:
+                text = content.decode("utf-8", errors="ignore")
+
+            if "mos" in name_lower or "method" in name_lower:
+                mos_text = text
+            elif "ra" in name_lower or "risk" in name_lower:
+                ra_text = text
+            elif "swp" in name_lower or "safe" in name_lower or "sop" in name_lower:
+                swp_text = text
+        except Exception as e:
+            logger.warning(f"Drive sync: cannot download {f['name']}: {e}")
+
+    if not mos_text and not ra_text and not swp_text:
+        return False
+
+    existing = db.query(Template).filter(
+        Template.project_type == project_type,
+        Template.label.contains("[Drive]"),
+    ).first()
+
+    if existing:
+        if mos_text: existing.mos_text = mos_text
+        if ra_text:  existing.ra_text = ra_text
+        if swp_text: existing.swp_text = swp_text
+    else:
+        db.add(Template(
+            user_id=None,
+            project_type=project_type,
+            label=f"{project_type} [Drive]",
+            mos_text=mos_text,
+            ra_text=ra_text,
+            swp_text=swp_text,
+        ))
+
+    db.commit()
+    logger.info(f"Drive sync: {project_type} ✓")
+    return True
+
+
+def sync_templates(db) -> list[dict]:
+    """
+    Sync template files from Google Drive into the Template DB table.
+    First tries to list folders via API; falls back to hardcoded known file IDs
+    when the folder is shared as 'Anyone with link' (not listable via API key).
+    """
     creds = _get_creds()
     api_key = _get_api_key()
 
-    if not creds and not api_key:
-        logger.warning("Drive sync: no GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_API_KEY set.")
-        return []
+    synced = []
 
+    # Try dynamic listing via API first
     try:
         items = _list_folder(TEMPLATE_FOLDER_ID, creds, api_key)
-    except Exception as e:
-        logger.error(f"Drive sync: cannot list template folder: {e}")
-        return []
-
-    synced = []
-    for folder in items:
-        if folder.get("mimeType") != "application/vnd.google-apps.folder":
-            continue
-        project_type = TYPE_MAP.get(folder["name"].strip().lower())
-        if not project_type:
-            continue
-
-        try:
-            files = _list_folder(folder["id"], creds, api_key)
-        except Exception as e:
-            logger.warning(f"Drive sync: cannot list {folder['name']}: {e}")
-            continue
-
-        mos_text = ra_text = swp_text = ""
-        for f in files:
-            name_lower = f["name"].lower()
+        for folder in items:
+            if folder.get("mimeType") != "application/vnd.google-apps.folder":
+                continue
+            project_type = TYPE_MAP.get(folder["name"].strip().lower())
+            if not project_type:
+                continue
             try:
-                content = _download(f["id"], creds, api_key)
-                try:
-                    text = parse_file(content, f["name"])
-                except Exception:
-                    text = content.decode("utf-8", errors="ignore")
-
-                if "mos" in name_lower or "method" in name_lower:
-                    mos_text = text
-                elif "ra" in name_lower or "risk" in name_lower:
-                    ra_text = text
-                elif "swp" in name_lower or "safe" in name_lower or "sop" in name_lower:
-                    swp_text = text
+                files = _list_folder(folder["id"], creds, api_key)
+                if _sync_project_type(project_type, files, db, creds, api_key):
+                    synced.append({"project_type": project_type, "folder": folder["name"]})
             except Exception as e:
-                logger.warning(f"Drive sync: cannot download {f['name']}: {e}")
+                logger.warning(f"Drive sync: cannot process {folder['name']}: {e}")
+    except Exception as e:
+        logger.warning(f"Drive sync: API listing failed ({e}), using hardcoded file IDs.")
 
-        existing = db.query(Template).filter(
-            Template.project_type == project_type,
-            Template.label.contains("[Drive]"),
-        ).first()
-
-        if existing:
-            if mos_text: existing.mos_text = mos_text
-            if ra_text:  existing.ra_text = ra_text
-            if swp_text: existing.swp_text = swp_text
-        else:
-            db.add(Template(
-                user_id=None,
-                project_type=project_type,
-                label=f"{project_type} [Drive]",
-                mos_text=mos_text,
-                ra_text=ra_text,
-                swp_text=swp_text,
-            ))
-
-        db.commit()
-        synced.append({"project_type": project_type, "folder": folder["name"]})
-        logger.info(f"Drive sync: {project_type} ✓")
+    # If API listing yielded nothing, fall back to hardcoded known file IDs
+    if not synced:
+        logger.info("Drive sync: falling back to hardcoded file IDs.")
+        for project_type, files in KNOWN_TEMPLATES.items():
+            if _sync_project_type(project_type, files, db, creds, api_key):
+                synced.append({"project_type": project_type, "folder": project_type})
 
     return synced
