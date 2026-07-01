@@ -134,6 +134,8 @@ def _call_tool(system: str, user_msg: str, tool: dict, max_tokens: int = 8192) -
         tool_choice={"type": "tool", "name": tool["name"]},
         messages=[{"role": "user", "content": user_msg}],
     )
+    if response.stop_reason == "max_tokens":
+        print(f"[WARNING] Claude hit max_tokens limit ({max_tokens}) — output was truncated")
     for block in response.content:
         if block.type == "tool_use":
             return block.input
@@ -186,22 +188,25 @@ def _build_ra_prompt(mos_text: str, project_details: dict,
     elif feedback:
         feedback_block = f"\n\nUSER FEEDBACK: {feedback}\n"
 
-    return f"""Generate a complete Risk Assessment for EVERY work activity in this Method Statement.
-You MUST populate the activities array — do not return an empty list.
+    return f"""Generate a Risk Assessment for every work activity in this Method Statement.
 
 PROJECT: {project_details.get('project_name', '')}
 Type: {project_details.get('project_type', '')}
 Location: {project_details.get('location', '')}
 {few_shot_block}{feedback_block}
 METHOD STATEMENT:
-{mos_text[:8000]}
+{mos_text[:7000]}
 
-Rules:
-- activities array must NOT be empty
-- Include every distinct work activity from the MOS
-- Last entry must be SGSecure / Emergency Preparedness
-- initial_rpn must be > residual_rpn
-- Be specific — name actual hazards, actual equipment, actual injuries"""
+CRITICAL OUTPUT RULES (to stay within token limit):
+- activities array MUST NOT be empty — include every distinct activity
+- Keep each control measure field to 1 sentence max (20 words)
+- Use "NA" for elimination/substitution when not applicable
+- S, L, RPN are integers only (no text)
+- implementation_person: 2 words max (e.g. "Site Supervisor")
+- due_date: "On-going" or a date only
+- remarks: leave empty string unless essential
+- Last activity must be "SGSecure / Emergency Preparedness"
+- initial_rpn MUST be higher than residual_rpn"""
 
 
 def _generate_ra(mos_text: str, project_details: dict, few_shot_examples: list = None,
@@ -210,17 +215,22 @@ def _generate_ra(mos_text: str, project_details: dict, few_shot_examples: list =
     prompt = _build_ra_prompt(mos_text, project_details, few_shot_examples, feedback, previous_ra)
     result = _call_tool(system=SYSTEM_PROMPT, user_msg=prompt, tool=RA_TOOL, max_tokens=8192)
 
-    # Retry once with a simpler prompt if Claude returned empty activities
+    # Retry once with a shorter prompt and stricter conciseness if first attempt returned empty
     if not result.get("activities"):
-        print("[WARNING] RA returned empty activities — retrying with simplified prompt")
-        simple_prompt = f"""Generate a Risk Assessment for this project. The activities array MUST be filled in.
+        print("[WARNING] RA returned empty activities — retrying with concise prompt")
+        simple_prompt = f"""Generate a Risk Assessment for this {project_details.get('project_type', '')} project.
 
-PROJECT: {project_details.get('project_name', '')} ({project_details.get('project_type', '')})
+PROJECT: {project_details.get('project_name', '')}
+Location: {project_details.get('location', '')}
 
-METHOD STATEMENT SUMMARY:
-{mos_text[:5000]}
+METHOD STATEMENT (extract):
+{mos_text[:4000]}
 
-Fill in at least 10 activities covering the work described above. Do not return an empty activities list."""
+RULES:
+- You MUST return a non-empty activities array
+- Each control field: max 15 words, use "NA" if not applicable
+- Aim for 10-15 activities covering the main work tasks
+- Last activity: SGSecure / Emergency Preparedness"""
         result = _call_tool(system=SYSTEM_PROMPT, user_msg=simple_prompt, tool=RA_TOOL, max_tokens=8192)
 
     if not result.get("activities"):
