@@ -19,6 +19,7 @@ export default function GeneratePage() {
   const [feedbackLoading, setFeedbackLoading] = useState(false)
   const [driveUrl, setDriveUrl] = useState('')
   const [uploadMode, setUploadMode] = useState('file') // 'file' | 'drive'
+  const [selectedFile, setSelectedFile] = useState(null)
   const fileRef = useRef()
 
   // ── Step 1: Upload MOS ──────────────────────────────────────────────────
@@ -164,6 +165,7 @@ export default function GeneratePage() {
       const dt = new DataTransfer()
       dt.items.add(file)
       fileRef.current.files = dt.files
+      setSelectedFile(file)
       setUploadMode('file')
     }
   }
@@ -233,18 +235,32 @@ export default function GeneratePage() {
 
           {uploadMode === 'file' ? (
             <div
-              className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-blue-400 transition cursor-pointer"
+              className={`border-2 border-dashed rounded-xl p-8 text-center transition cursor-pointer
+                ${selectedFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-blue-400'}`}
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleDrop}
               onClick={() => fileRef.current?.click()}
             >
-              <svg className="w-10 h-10 text-gray-400 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              <p className="text-gray-600 text-sm">Drag and drop your MOS here, or <span className="text-blue-600 font-medium">browse</span></p>
-              <p className="text-gray-400 text-xs mt-1">Supports PDF and DOCX files</p>
-              <input ref={fileRef} type="file" accept=".pdf,.docx" className="hidden" />
+              {selectedFile ? (
+                <>
+                  <svg className="w-10 h-10 text-green-500 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-green-700 font-medium text-sm">{selectedFile.name}</p>
+                  <p className="text-green-500 text-xs mt-1">{(selectedFile.size / 1024).toFixed(0)} KB · Click to change file</p>
+                </>
+              ) : (
+                <>
+                  <svg className="w-10 h-10 text-gray-400 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  <p className="text-gray-600 text-sm">Drag and drop your MOS here, or <span className="text-blue-600 font-medium">browse</span></p>
+                  <p className="text-gray-400 text-xs mt-1">Supports PDF and DOCX files</p>
+                </>
+              )}
+              <input ref={fileRef} type="file" accept=".pdf,.docx" className="hidden"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
             </div>
           ) : (
             <div>
