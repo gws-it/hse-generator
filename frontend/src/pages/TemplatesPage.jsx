@@ -81,18 +81,6 @@ export default function TemplatesPage() {
           </div>
         )}
 
-        <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-700 space-y-1">
-          <p><strong>Drive folder structure required:</strong></p>
-          <p className="font-mono">📁 Your Template Folder/<br/>
-            &nbsp;&nbsp;📁 Green Wall/<br/>
-            &nbsp;&nbsp;&nbsp;&nbsp;📄 [MOS file].docx<br/>
-            &nbsp;&nbsp;&nbsp;&nbsp;📄 [RA file].docx<br/>
-            &nbsp;&nbsp;&nbsp;&nbsp;📄 [SWP file].docx<br/>
-            &nbsp;&nbsp;📁 Green Roof/<br/>
-            &nbsp;&nbsp;📁 Construction/<br/>
-            &nbsp;&nbsp;📁 Landscape/</p>
-          <p className="mt-1">File names containing "MOS/method", "RA/risk", "SWP/safe" are auto-detected.</p>
-        </div>
       </div>
 
       {/* Template sections */}
