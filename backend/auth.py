@@ -33,6 +33,14 @@ def verify_google_token(token: str) -> dict:
     if data.get("aud") not in allowed_client_ids:
         raise HTTPException(status_code=401, detail="Token audience mismatch")
 
+    email = data.get("email", "")
+    allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "gwslivingart.com")
+    if not email.endswith(f"@{allowed_domain}"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access is restricted to @{allowed_domain} accounts only."
+        )
+
     return data
 
 

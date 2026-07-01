@@ -314,10 +314,9 @@ def generate(body: dict, db: Session = Depends(get_db), current_user: User = Dep
 
 @app.post("/api/feedback")
 def apply_feedback(body: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Apply user feedback to regenerate RA/SWP."""
+    """Start feedback regeneration as a background job. Returns job_id immediately."""
     generation_id = body.get("generation_id")
     feedback = body.get("feedback", "").strip()
-
     if not feedback:
         raise HTTPException(400, "feedback text is required")
 
@@ -325,38 +324,37 @@ def apply_feedback(body: dict, db: Session = Depends(get_db), current_user: User
     if not gen:
         raise HTTPException(404, "Generation not found")
 
-    project_details = {
-        "project_name": gen.project_name,
-        "project_type": gen.project_type,
-        "location": gen.location,
-        "ra_leader": gen.ra_leader,
-        "approved_by": gen.approved_by,
-        "ra_members": gen.ra_members,
-        "reference_no": gen.reference_no,
-        "company": gen.company,
-        "client": gen.client,
-        "assessment_date": gen.assessment_date,
-    }
+    project_details = _project_details_from_gen(gen)
+    mos_text = gen.mos_text
+    prev_output = gen.ra_swp_json
 
-    try:
-        new_ra_swp = generate_ra_swp(
-            gen.mos_text,
-            project_details,
-            feedback=feedback,
-            previous_output=gen.ra_swp_json,
-        )
-    except Exception as e:
-        raise HTTPException(500, f"Regeneration failed: {e}")
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "processing", "step": "feedback", "result": None, "error": None}
 
-    # Append to feedback history and update
-    history = gen.feedback_history or []
-    history.append({"feedback": feedback, "timestamp": datetime.utcnow().isoformat()})
-    gen.feedback_history = history
-    gen.ra_swp_json = new_ra_swp
-    gen.updated_at = datetime.utcnow()
-    db.commit()
+    def run():
+        try:
+            new_ra_swp = generate_ra_swp(mos_text, project_details, feedback=feedback, previous_output=prev_output)
+            from database import SessionLocal
+            db2 = SessionLocal()
+            try:
+                g = db2.query(Generation).filter(Generation.id == generation_id).first()
+                history = g.feedback_history or []
+                history.append({"feedback": feedback, "timestamp": datetime.utcnow().isoformat()})
+                g.feedback_history = history
+                g.ra_swp_json = new_ra_swp
+                g.updated_at = datetime.utcnow()
+                db2.commit()
+                jobs[job_id] = {"status": "done", "step": "feedback",
+                                "result": {"generation_id": generation_id, "ra_swp": new_ra_swp}, "error": None}
+            finally:
+                db2.close()
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] Feedback job {job_id}: {traceback.format_exc()}")
+            jobs[job_id] = {"status": "error", "step": "feedback", "result": None, "error": str(e)}
 
-    return {"generation_id": gen.id, "ra_swp": new_ra_swp}
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": "processing"}
 
 
 # ── Download ──────────────────────────────────────────────────────────────
@@ -554,6 +552,46 @@ def delete_template(template_id: int, db: Session = Depends(get_db), current_use
     db.delete(tmpl)
     db.commit()
     return {"ok": True}
+
+
+# ── Approve (save accepted generation as template) ────────────────────────
+
+@app.post("/api/generations/{generation_id}/approve")
+def approve_generation(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """User approves the generated report — saves to template DB and optionally to Drive."""
+    gen = _get_gen(generation_id, current_user, db)
+    if not gen.ra_swp_json:
+        raise HTTPException(400, "No generated content to approve")
+
+    # Save to template DB
+    existing = db.query(Template).filter(
+        Template.project_type == gen.project_type,
+        Template.label == f"[Approved] {gen.project_name}",
+    ).first()
+
+    if not existing:
+        db.add(Template(
+            user_id=gen.user_id,
+            project_type=gen.project_type,
+            label=f"[Approved] {gen.project_name}",
+            mos_text=(gen.mos_text or "")[:5000],
+            ra_text=json.dumps(gen.ra_swp_json.get("ra", {}), indent=2)[:8000],
+            swp_text=json.dumps(gen.ra_swp_json.get("swp", {}), indent=2)[:8000],
+        ))
+        db.commit()
+
+    # Try to upload DOCX files to Google Drive (requires service account)
+    drive_uploaded = False
+    try:
+        logo = drive_sync.get_logo_bytes()
+        ra_bytes  = build_ra_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("ra",  {}), logo)
+        swp_bytes = build_swp_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("swp", {}), logo)
+        drive_sync.upload_approved(gen.project_type, gen.project_name, ra_bytes, swp_bytes)
+        drive_uploaded = True
+    except Exception as e:
+        print(f"[Drive upload skipped] {e}")
+
+    return {"ok": True, "drive_uploaded": drive_uploaded}
 
 
 # ── History ───────────────────────────────────────────────────────────────

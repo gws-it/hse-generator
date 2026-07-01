@@ -6,6 +6,7 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const [clientId, setClientId] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loginError, setLoginError] = useState('')
 
   useEffect(() => {
     if (localStorage.getItem('token')) {
@@ -26,8 +27,13 @@ export default function LoginPage() {
         localStorage.setItem('user', JSON.stringify(res.data.user))
         navigate('/generate')
       } catch (err) {
+        const status = err.response?.status
         const detail = err.response?.data?.detail || err.message || 'Unknown error'
-        alert(`Login failed: ${detail}`)
+        if (status === 403) {
+          setLoginError(detail)
+        } else {
+          setLoginError(`Login failed. Please try again.`)
+        }
       }
     }
   }, [navigate])
@@ -91,6 +97,12 @@ export default function LoginPage() {
           )}
 
           <div id="google-btn" className="flex justify-center mt-2" />
+
+          {loginError && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {loginError}
+            </div>
+          )}
         </div>
 
         <p className="mt-6 text-xs text-gray-400">

@@ -124,6 +124,46 @@ def get_logo_bytes() -> bytes | None:
         return None
 
 
+def upload_approved(project_type: str, project_name: str, ra_bytes: bytes, swp_bytes: bytes):
+    """Upload approved RA and SWP DOCX files into the correct Drive subfolder."""
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set — cannot upload to Drive")
+
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+
+    service = build("drive", "v3", credentials=creds)
+
+    # Find or create the project-type subfolder
+    folder_name = project_type
+    q = (f"'{TEMPLATE_FOLDER_ID}' in parents and "
+         f"mimeType='application/vnd.google-apps.folder' and "
+         f"name='{folder_name}' and trashed=false")
+    res = service.files().list(q=q, fields="files(id)").execute()
+    folders = res.get("files", [])
+
+    if folders:
+        folder_id = folders[0]["id"]
+    else:
+        meta = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder",
+                "parents": [TEMPLATE_FOLDER_ID]}
+        folder_id = service.files().create(body=meta, fields="id").execute()["id"]
+
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    safe_name = project_name.replace("/", "-").replace("\\", "-")[:80]
+
+    for label, content in [("RA", ra_bytes), ("SWP", swp_bytes)]:
+        filename = f"{label}_{safe_name}.docx"
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=docx_mime, resumable=False)
+        service.files().create(
+            body={"name": filename, "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+        ).execute()
+        logger.info(f"Drive: uploaded {filename} to {project_type}/")
+
+
 def sync_templates(db) -> list[dict]:
     """
     Scan Drive template folder subfolders, download MOS/RA/SWP files, and

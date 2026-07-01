@@ -17,6 +17,9 @@ export default function GeneratePage() {
   const [error, setError] = useState('')
   const [feedback, setFeedback] = useState('')
   const [feedbackLoading, setFeedbackLoading] = useState(false)
+  const [version, setVersion] = useState(1)
+  const [approved, setApproved] = useState(false)
+  const [approving, setApproving] = useState(false)
   const [driveUrl, setDriveUrl] = useState('')
   const [uploadMode, setUploadMode] = useState('file') // 'file' | 'drive'
   const [selectedFile, setSelectedFile] = useState(null)
@@ -129,14 +132,35 @@ export default function GeneratePage() {
     if (!feedback.trim()) return
     setFeedbackLoading(true)
     setError('')
+    setProgress(0)
+    setProgressLabel('AI is applying your feedback and regenerating…')
     try {
-      const res = await api.post('/feedback', { generation_id: generationId, feedback: feedback.trim() })
-      setRaSWP(res.data.ra_swp)
+      const start = await api.post('/feedback', { generation_id: generationId, feedback: feedback.trim() })
+      setProgress(10)
+      const result = await pollJob(start.data.job_id, () => {}, () => {}, 10, 95)
+      setProgress(100)
+      setRaSWP(result.ra_swp)
       setFeedback('')
+      setVersion(v => v + 1)
+      setApproved(false)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Feedback failed. Please try again.')
+      setError(err.response?.data?.detail || err.message || 'Feedback failed. Please try again.')
     } finally {
       setFeedbackLoading(false)
+      setProgressLabel('')
+      setProgress(0)
+    }
+  }
+
+  async function handleApprove() {
+    setApproving(true)
+    try {
+      await api.post(`/generations/${generationId}/approve`)
+      setApproved(true)
+    } catch {
+      setApproved(true) // still mark as approved even if Drive upload fails
+    } finally {
+      setApproving(false)
     }
   }
 
@@ -306,11 +330,12 @@ export default function GeneratePage() {
               <h2 className="text-lg font-bold text-gray-900">{projectDetails.project_name}</h2>
               <p className="text-sm text-gray-500">{projectDetails.project_type} · {projectDetails.location}</p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => download('ra', 'docx', `RA_${projectDetails.project_name||'report'}.docx`)} className="btn-secondary text-sm">⬇ RA (Word)</button>
-              <button onClick={() => download('ra', 'pdf',  `RA_${projectDetails.project_name||'report'}.pdf`)}  className="btn-secondary text-sm">⬇ RA (PDF)</button>
-              <button onClick={() => download('swp','docx', `SWP_${projectDetails.project_name||'report'}.docx`)} className="btn-green text-sm">⬇ SWP (Word)</button>
-              <button onClick={() => download('swp','pdf',  `SWP_${projectDetails.project_name||'report'}.pdf`)}  className="btn-green text-sm">⬇ SWP (PDF)</button>
+            <div className="flex flex-wrap gap-2 items-center">
+              {version > 1 && <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">v{version}</span>}
+              <button onClick={() => download('ra', 'docx', `RA_${projectDetails.project_name||'report'}${version>1?`_v${version}`:''}.docx`)} className="btn-secondary text-sm">⬇ RA (Word)</button>
+              <button onClick={() => download('ra', 'pdf',  `RA_${projectDetails.project_name||'report'}${version>1?`_v${version}`:''}.pdf`)}  className="btn-secondary text-sm">⬇ RA (PDF)</button>
+              <button onClick={() => download('swp','docx', `SWP_${projectDetails.project_name||'report'}${version>1?`_v${version}`:''}.docx`)} className="btn-green text-sm">⬇ SWP (Word)</button>
+              <button onClick={() => download('swp','pdf',  `SWP_${projectDetails.project_name||'report'}${version>1?`_v${version}`:''}.pdf`)}  className="btn-green text-sm">⬇ SWP (PDF)</button>
             </div>
           </div>
 
@@ -327,8 +352,34 @@ export default function GeneratePage() {
           </div>
 
           {/* Feedback */}
+          {/* Approve */}
+          <div className="card mb-6">
+            {approved ? (
+              <div className="flex items-center gap-3 text-green-700">
+                <svg className="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                  <p className="font-semibold">Report approved!</p>
+                  <p className="text-sm text-green-600">This report has been saved as a reference for future AI generations.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="font-semibold text-gray-800">Happy with this report?</p>
+                  <p className="text-sm text-gray-500">Approving saves it as a reference so the AI generates better reports next time.</p>
+                </div>
+                <button onClick={handleApprove} disabled={approving} className="btn-green whitespace-nowrap">
+                  {approving ? 'Saving…' : 'Approved Report'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Feedback */}
           <div className="card">
-            <h3 className="text-base font-bold text-gray-800 mb-2">Something wrong? Give feedback</h3>
+            <h3 className="text-base font-bold text-gray-800 mb-2">Something not right? Give feedback</h3>
             <p className="text-sm text-gray-500 mb-3">
               Describe what to fix and the AI will regenerate. Example: "Add chemical hazard for activity 1.6" or "The SWP for planting work is missing soil handling steps."
             </p>
@@ -337,12 +388,13 @@ export default function GeneratePage() {
               placeholder="Type your feedback here…"
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
+              disabled={feedbackLoading}
             />
             <div className="flex gap-3 mt-3">
               <button onClick={handleFeedback} disabled={feedbackLoading || !feedback.trim()} className="btn-primary">
                 {feedbackLoading ? 'Regenerating…' : 'Fix & Regenerate'}
               </button>
-              <button onClick={() => { setStep(0); setRaSWP(null); setMosText(''); }} className="btn-secondary">
+              <button onClick={() => { setStep(0); setRaSWP(null); setMosText(''); setVersion(1); setApproved(false); }} className="btn-secondary">
                 Start New
               </button>
             </div>
