@@ -58,3 +58,18 @@ class Generation(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="generations")
+    versions = relationship("GenerationVersion", back_populates="generation", order_by="GenerationVersion.version_num")
+
+
+class GenerationVersion(Base):
+    """Snapshot of ra_swp_json content at a point in time, so past versions stay downloadable."""
+    __tablename__ = "generation_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    generation_id = Column(Integer, ForeignKey("generations.id"), nullable=False)
+    version_num = Column(Integer, nullable=False)
+    ra_swp_json = Column(JSON)
+    feedback = Column(Text, nullable=True)  # None for the original (version 1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    generation = relationship("Generation", back_populates="versions")

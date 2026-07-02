@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from database import get_db, init_db
-from models import User, Generation, Template
+from models import User, Generation, Template, GenerationVersion
 from auth import verify_google_token, create_jwt, get_current_user, get_or_create_user
 from parse_mos import parse_file, parse_google_doc
 from generate import extract_project_details, generate_ra_swp, _generate_ra, _generate_swp
@@ -338,11 +338,35 @@ def apply_feedback(body: dict, db: Session = Depends(get_db), current_user: User
             db2 = SessionLocal()
             try:
                 g = db2.query(Generation).filter(Generation.id == generation_id).first()
+
+                # Lazily snapshot the pre-feedback content as version 1 the first time
+                # feedback is applied, then snapshot the new content as the next version.
+                existing_versions = (
+                    db2.query(GenerationVersion)
+                    .filter(GenerationVersion.generation_id == generation_id)
+                    .order_by(GenerationVersion.version_num)
+                    .all()
+                )
+                if not existing_versions:
+                    db2.add(GenerationVersion(
+                        generation_id=generation_id, version_num=1,
+                        ra_swp_json=g.ra_swp_json, feedback=None, created_at=g.created_at,
+                    ))
+                    next_version_num = 2
+                else:
+                    next_version_num = existing_versions[-1].version_num + 1
+
                 history = g.feedback_history or []
                 history.append({"feedback": feedback, "timestamp": datetime.utcnow().isoformat()})
                 g.feedback_history = history
                 g.ra_swp_json = new_ra_swp
                 g.updated_at = datetime.utcnow()
+
+                db2.add(GenerationVersion(
+                    generation_id=generation_id, version_num=next_version_num,
+                    ra_swp_json=new_ra_swp, feedback=feedback, created_at=datetime.utcnow(),
+                ))
+
                 db2.commit()
                 jobs[job_id] = {"status": "done", "step": "feedback",
                                 "result": {"generation_id": generation_id, "ra_swp": new_ra_swp}, "error": None}
@@ -438,6 +462,53 @@ def download_swp_pdf(generation_id: int, db: Session = Depends(get_db), current_
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _get_version_content(gen: Generation, version_num: int, db: Session) -> dict:
+    versions = (
+        db.query(GenerationVersion)
+        .filter(GenerationVersion.generation_id == gen.id)
+        .order_by(GenerationVersion.version_num)
+        .all()
+    )
+    if not versions:
+        if version_num != 1:
+            raise HTTPException(404, "Version not found")
+        return gen.ra_swp_json
+    match = next((v for v in versions if v.version_num == version_num), None)
+    if not match:
+        raise HTTPException(404, "Version not found")
+    if match.version_num == versions[-1].version_num:
+        return gen.ra_swp_json  # latest version is always kept in sync with gen.ra_swp_json
+    return match.ra_swp_json
+
+
+@app.get("/api/download/{generation_id}/version/{version_num}/{doc}/{fmt}")
+def download_version(
+    generation_id: int, version_num: int, doc: str, fmt: str,
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    if doc not in ("ra", "swp") or fmt not in ("docx", "pdf"):
+        raise HTTPException(400, "Invalid doc or format")
+    gen = _get_gen(generation_id, current_user, db)
+    content = _get_version_content(gen, version_num, db)
+    logo = drive_sync.get_logo_bytes()
+    builder = build_ra_docx if doc == "ra" else build_swp_docx
+    docx_bytes = builder(_project_details_from_gen(gen), (content or {}).get(doc, {}), logo)
+
+    if fmt == "pdf":
+        file_bytes = _convert_to_pdf(docx_bytes)
+        media_type = "application/pdf"
+    else:
+        file_bytes = docx_bytes
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    fname = f"{doc.upper()}_{gen.project_name or 'report'}_v{version_num}.{fmt}".replace(" ", "_")
+    return StreamingResponse(
+        io.BytesIO(file_bytes),
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
@@ -631,6 +702,30 @@ def history_detail(generation_id: int, db: Session = Depends(get_db), current_us
         "feedback_history": gen.feedback_history,
         "created_at": gen.created_at.isoformat(),
     }
+
+
+@app.get("/api/history/{generation_id}/versions")
+def list_versions(generation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    gen = _get_gen(generation_id, current_user, db)
+    versions = (
+        db.query(GenerationVersion)
+        .filter(GenerationVersion.generation_id == generation_id)
+        .order_by(GenerationVersion.version_num)
+        .all()
+    )
+    if not versions:
+        return [{
+            "version_num": 1, "feedback": None,
+            "created_at": gen.created_at.isoformat(), "is_current": True,
+        }]
+
+    latest_num = versions[-1].version_num
+    return [{
+        "version_num": v.version_num,
+        "feedback": v.feedback,
+        "created_at": v.created_at.isoformat(),
+        "is_current": v.version_num == latest_num,
+    } for v in versions]
 
 
 # ── Serve React frontend ───────────────────────────────────────────────────
