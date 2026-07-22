@@ -15,6 +15,7 @@ export default function MaintenanceGeneratePage() {
   const [projects, setProjects] = useState([])
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [dropdownOpen, setDropdownOpen] = useState(false)
   const [selectedProject, setSelectedProject] = useState(null)
   const [address, setAddress] = useState('')
 
@@ -68,6 +69,7 @@ export default function MaintenanceGeneratePage() {
     setSelectedProject(project)
     setAddress(project.address || '')
     setSearch('')
+    setDropdownOpen(false)
     resetSearchResults()
   }
 
@@ -206,12 +208,14 @@ export default function MaintenanceGeneratePage() {
           <>
             <input
               className="input"
-              placeholder={projectsLoading ? 'Loading projects…' : 'Search project by name or code…'}
+              placeholder={projectsLoading ? 'Loading projects…' : 'Click to browse, or search by name or code…'}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onFocus={() => setDropdownOpen(true)}
+              onBlur={() => setTimeout(() => setDropdownOpen(false), 150)}
               disabled={projectsLoading}
             />
-            {search.trim() && (
+            {dropdownOpen && (
               <div className="mt-2 max-h-56 overflow-y-auto border border-gray-200 rounded-lg divide-y">
                 {filteredProjects.length === 0 && (
                   <p className="p-3 text-sm text-gray-400">No matches.</p>
@@ -226,6 +230,9 @@ export default function MaintenanceGeneratePage() {
                     <span className="text-gray-500"> — {p.name}</span>
                   </button>
                 ))}
+                {filteredProjects.length > 30 && (
+                  <p className="p-2 text-xs text-gray-400 text-center">Showing first 30 — keep typing to narrow it down.</p>
+                )}
               </div>
             )}
 
