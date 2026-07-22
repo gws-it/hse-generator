@@ -51,9 +51,9 @@ def photobot_qr(current_user: User = Depends(get_current_user)):
     _require_configured()
     try:
         resp = requests.get(f"{PHOTOBOT_API_URL}/qr", headers=_headers(), timeout=10)
+        if resp.status_code == 404:
+            raise HTTPException(404, "No fresh QR code available")
+        resp.raise_for_status()
     except requests.RequestException as e:
         raise HTTPException(502, f"Photo bot unreachable: {e}")
-    if resp.status_code == 404:
-        raise HTTPException(404, "No fresh QR code available")
-    resp.raise_for_status()
     return StreamingResponse(iter([resp.content]), media_type="image/png")
