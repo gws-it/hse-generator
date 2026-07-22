@@ -27,7 +27,7 @@ export default function App() {
           path="/dashboard"
           element={
             <PrivateRoute>
-              <Navbar title="Company Tools" links={[]} />
+              <Navbar title="GWS Livingart Tools" links={[]} />
               <DashboardPage />
             </PrivateRoute>
           }

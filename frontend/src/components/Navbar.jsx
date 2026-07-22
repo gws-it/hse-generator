@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
+import { tools } from '../tools'
 
-export default function Navbar({ title = 'Company Tools', links = [] }) {
+export default function Navbar({ title = 'GWS Livingart Tools', links = [] }) {
   const navigate = useNavigate()
   const user = JSON.parse(localStorage.getItem('user') || '{}')
 
@@ -22,6 +23,22 @@ export default function Navbar({ title = 'Company Tools', links = [] }) {
               {link.label}
             </Link>
           ))}
+          <details className="relative">
+            <summary className="cursor-pointer list-none text-blue-200 hover:text-white text-sm transition select-none">
+              Switch Tool ▾
+            </summary>
+            <div className="absolute left-0 mt-2 w-56 bg-white rounded-lg shadow-xl py-1 z-50">
+              {tools.map((tool) => (
+                <Link
+                  key={tool.to}
+                  to={tool.to}
+                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  {tool.name}
+                </Link>
+              ))}
+            </div>
+          </details>
         </div>
         <div className="flex items-center gap-3">
           {user.picture && (
