@@ -26,6 +26,7 @@ from generate import extract_project_details, generate_ra_swp, _generate_ra, _ge
 from create_ra import build_ra_docx
 from create_swp import build_swp_docx
 import drive_sync
+import photobot_proxy
 
 app = FastAPI(title="HSE Report Generator", version="1.0.0")
 
@@ -39,6 +40,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(photobot_proxy.router)
 
 
 @app.get("/api/config")

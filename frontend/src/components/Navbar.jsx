@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
 
-export default function Navbar() {
+export default function Navbar({ title = 'Company Tools', links = [] }) {
   const navigate = useNavigate()
   const user = JSON.parse(localStorage.getItem('user') || '{}')
 
@@ -14,16 +14,14 @@ export default function Navbar() {
     <nav className="bg-blue-900 text-white shadow-lg">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
-          <span className="font-bold text-lg tracking-tight">WHSE Report Generator</span>
-          <Link to="/generate" className="text-blue-200 hover:text-white text-sm transition">
-            Generate
+          <Link to="/dashboard" className="font-bold text-lg tracking-tight hover:text-blue-200 transition">
+            {title}
           </Link>
-          <Link to="/history" className="text-blue-200 hover:text-white text-sm transition">
-            History
-          </Link>
-          <Link to="/templates" className="text-blue-200 hover:text-white text-sm transition">
-            Templates
-          </Link>
+          {links.map((link) => (
+            <Link key={link.to} to={link.to} className="text-blue-200 hover:text-white text-sm transition">
+              {link.label}
+            </Link>
+          ))}
         </div>
         <div className="flex items-center gap-3">
           {user.picture && (
