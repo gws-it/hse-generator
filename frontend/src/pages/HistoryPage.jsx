@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
+import HistoryDetail from '../components/HistoryDetail'
 
 export default function HistoryPage() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
+  const [selectedId, setSelectedId] = useState(null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -16,7 +18,8 @@ export default function HistoryPage() {
     return map[type] || 'bg-gray-100 text-gray-700'
   }
 
-  async function download(id, doc, fmt, name) {
+  async function download(id, doc, fmt, name, e) {
+    e?.stopPropagation()
     try {
       const res = await api.get(`/download/${id}/${doc}/${fmt}`, { responseType: 'blob' })
       const url = URL.createObjectURL(new Blob([res.data]))
@@ -46,7 +49,7 @@ export default function HistoryPage() {
 
       <div className="space-y-3">
         {history.map((gen) => (
-          <div key={gen.id} className="card flex flex-wrap items-center gap-4">
+          <div key={gen.id} onClick={() => setSelectedId(gen.id)} className="card flex flex-wrap items-center gap-4 cursor-pointer hover:shadow-md transition">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-semibold text-gray-900 truncate">{gen.project_name || 'Untitled'}</h3>
@@ -55,17 +58,22 @@ export default function HistoryPage() {
                   <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">{gen.feedback_count} feedback{gen.feedback_count > 1 ? 's' : ''}</span>
                 )}
               </div>
-              <p className="text-sm text-gray-500 mt-0.5">{gen.location} · {new Date(gen.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {gen.location} · {new Date(gen.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}{' '}
+                {new Date(gen.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => download(gen.id,'ra','docx',gen.project_name)} className="btn-secondary text-xs py-1">⬇ RA (Word)</button>
-              <button onClick={() => download(gen.id,'ra','pdf', gen.project_name)} className="btn-secondary text-xs py-1">⬇ RA (PDF)</button>
-              <button onClick={() => download(gen.id,'swp','docx',gen.project_name)} className="btn-green text-xs py-1">⬇ SWP (Word)</button>
-              <button onClick={() => download(gen.id,'swp','pdf', gen.project_name)} className="btn-green text-xs py-1">⬇ SWP (PDF)</button>
+              <button onClick={(e) => download(gen.id,'ra','docx',gen.project_name,e)} className="btn-secondary text-xs py-1">⬇ RA (Word)</button>
+              <button onClick={(e) => download(gen.id,'ra','pdf', gen.project_name,e)} className="btn-secondary text-xs py-1">⬇ RA (PDF)</button>
+              <button onClick={(e) => download(gen.id,'swp','docx',gen.project_name,e)} className="btn-green text-xs py-1">⬇ SWP (Word)</button>
+              <button onClick={(e) => download(gen.id,'swp','pdf', gen.project_name,e)} className="btn-green text-xs py-1">⬇ SWP (PDF)</button>
             </div>
           </div>
         ))}
       </div>
+
+      {selectedId && <HistoryDetail generationId={selectedId} onClose={() => setSelectedId(null)} />}
     </div>
   )
 }

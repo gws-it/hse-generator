@@ -22,5 +22,5 @@ def get_db():
 
 
 def init_db():
-    from models import User, Generation
+    from models import User, Generation, Template, GenerationVersion
     Base.metadata.create_all(bind=engine)
