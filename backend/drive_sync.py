@@ -226,6 +226,85 @@ def _sync_project_type(project_type: str, files: list[dict], db, creds, api_key:
     return True
 
 
+# ── Maintenance-report photo search ────────────────────────────────────────
+# The Photo-to-Drive bot organizes its Shared Drive as
+# <date YYYY-MM-DD>/<"<code> - <name>">/<photo>. There's no efficient way to
+# query "descendants of folder X" in the Drive API, so instead we search
+# globally for folders matching that exact name (assumes the service account
+# only has access to Drives relevant to this app, so a global name search
+# won't collide with an unrelated folder that happens to share the name).
+
+def _escape_query(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def find_project_folders(code: str, name: str, service=None) -> list[dict]:
+    """Find every Drive folder named '<code> - <name>' (the bot's project-folder
+    naming convention). Returns [{id, name, parents}]."""
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot search Drive")
+    if service is None:
+        from googleapiclient.discovery import build
+        service = build("drive", "v3", credentials=creds)
+
+    folder_name = _escape_query(f"{code} - {name}")
+    q = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    result = service.files().list(
+        q=q,
+        fields="files(id,name,parents)",
+        corpora="allDrives",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+    ).execute()
+    return result.get("files", [])
+
+
+def list_project_photos(code: str, name: str, date_from: str, date_to: str) -> list[dict]:
+    """
+    Return [{file_id, name, date}] for every image in this project's Drive
+    folders whose parent date-folder (format YYYY-MM-DD) falls within
+    [date_from, date_to] inclusive.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot search Drive")
+    from googleapiclient.discovery import build
+    service = build("drive", "v3", credentials=creds)
+
+    photos = []
+    for folder in find_project_folders(code, name, service):
+        parents = folder.get("parents") or []
+        if not parents:
+            continue
+        try:
+            date_meta = service.files().get(
+                fileId=parents[0], fields="name", supportsAllDrives=True
+            ).execute()
+        except Exception as e:
+            logger.warning(f"Drive: could not resolve date folder for {folder['name']}: {e}")
+            continue
+        date_str = date_meta.get("name", "")
+        if not date_str or not (date_from <= date_str <= date_to):
+            continue
+
+        q = f"'{folder['id']}' in parents and mimeType contains 'image/' and trashed=false"
+        res = service.files().list(
+            q=q, fields="files(id,name)",
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        for f in res.get("files", []):
+            photos.append({"file_id": f["id"], "name": f["name"], "date": date_str})
+
+    photos.sort(key=lambda p: (p["date"], p["name"]))
+    return photos
+
+
+def download_file(file_id: str) -> bytes:
+    """Download an arbitrary Drive file (e.g. a maintenance photo) by ID."""
+    return _download(file_id, _get_creds(), _get_api_key())
+
+
 def sync_templates(db) -> list[dict]:
     """
     Sync template files from Google Drive into the Template DB table.

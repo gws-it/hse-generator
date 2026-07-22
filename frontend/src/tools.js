@@ -9,4 +9,9 @@ export const tools = [
     name: 'Photo to Drive Bot',
     description: 'Status and reconnect controls for the WhatsApp → Google Drive photo bot.',
   },
+  {
+    to: '/maintenance/generate',
+    name: 'Maintenance Report Generator',
+    description: 'Generate maintenance checklists & photo reports from project photos already in Drive.',
+  },
 ]

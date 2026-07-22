@@ -5,6 +5,7 @@ import GeneratePage from './pages/GeneratePage'
 import HistoryPage from './pages/HistoryPage'
 import TemplatesPage from './pages/TemplatesPage'
 import PhotoBotPage from './pages/PhotoBotPage'
+import MaintenanceGeneratePage from './pages/MaintenanceGeneratePage'
 import Navbar from './components/Navbar'
 
 function PrivateRoute({ children }) {
@@ -65,6 +66,16 @@ export default function App() {
             <PrivateRoute>
               <Navbar title="Photo to Drive Bot" links={[]} />
               <PhotoBotPage />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/maintenance/generate"
+          element={
+            <PrivateRoute>
+              <Navbar title="Maintenance Report Generator" links={[]} />
+              <MaintenanceGeneratePage />
             </PrivateRoute>
           }
         />
