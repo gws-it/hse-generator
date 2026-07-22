@@ -21,7 +21,8 @@ router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
 def list_projects(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     projects = db.query(Project).order_by(Project.name).all()
     return [
-        {"id": p.id, "code": p.code, "name": p.name, "address": p.address, "project_type": p.project_type}
+        {"id": p.id, "code": p.code, "name": p.name, "address": p.address,
+         "client": p.client, "project_type": p.project_type}
         for p in projects
     ]
 
@@ -40,6 +41,7 @@ def add_project(body: dict, db: Session = Depends(get_db), current_user: User = 
         code=code,
         name=name,
         address=(body.get("address") or "").strip(),
+        client=(body.get("client") or "").strip(),
         project_type=body.get("project_type") or "Green Roof",
     )
     db.add(project)

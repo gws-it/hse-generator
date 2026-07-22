@@ -88,6 +88,7 @@ class Project(Base):
     code = Column(String(50), nullable=False, unique=True)
     name = Column(String(255), nullable=False)
     address = Column(String(500))
+    client = Column(String(255))  # client / main contractor, from the project masterlist
     project_type = Column(String(100))  # e.g. "Green Roof" -- determines checklist item set
     created_at = Column(DateTime, default=datetime.utcnow)
 
