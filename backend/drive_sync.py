@@ -305,6 +305,42 @@ def download_file(file_id: str) -> bytes:
     return _download(file_id, _get_creds(), _get_api_key())
 
 
+PHOTO_DRIVE_ROOT_FOLDER_ID = os.getenv("PHOTO_DRIVE_ROOT_FOLDER_ID", "")
+
+
+def browse_folder(folder_id: str = "") -> dict:
+    """
+    List the subfolders and images directly inside a Drive folder (defaults to
+    the bot's Drive root if no folder_id given). Manual fallback for when a
+    project's photos don't turn up in list_project_photos -- e.g. a typo in the
+    WhatsApp caption sent it to the wrong folder, or _Unsorted.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot browse Drive")
+
+    root = folder_id or PHOTO_DRIVE_ROOT_FOLDER_ID
+    if not root:
+        raise ValueError("PHOTO_DRIVE_ROOT_FOLDER_ID not configured -- cannot browse Drive")
+
+    from googleapiclient.discovery import build
+    service = build("drive", "v3", credentials=creds)
+
+    res = service.files().list(
+        q=f"'{root}' in parents and trashed=false",
+        fields="files(id,name,mimeType)",
+        orderBy="name desc",
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files", [])
+
+    folders = [{"id": f["id"], "name": f["name"]} for f in files
+               if f["mimeType"] == "application/vnd.google-apps.folder"]
+    images = [{"file_id": f["id"], "name": f["name"]} for f in files
+              if f["mimeType"].startswith("image/")]
+    return {"folders": folders, "images": images}
+
+
 def get_thumbnail(file_id: str) -> bytes:
     """
     Fetch Drive's pre-generated small thumbnail for a file instead of the full-

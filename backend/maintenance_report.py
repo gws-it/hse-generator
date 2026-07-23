@@ -84,6 +84,21 @@ def photo_preview(file_id: str, current_user: User = Depends(get_current_user)):
     return StreamingResponse(io.BytesIO(data), media_type="image/jpeg")
 
 
+@router.get("/drive/browse")
+def browse_drive(folder_id: str = "", current_user: User = Depends(get_current_user)):
+    """
+    Manual folder browser -- fallback for when list_project_photos finds
+    nothing (or misses some), e.g. a typo in the WhatsApp caption sent photos
+    to the wrong folder. folder_id empty means the Drive root.
+    """
+    try:
+        return drive_sync.browse_folder(folder_id)
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Drive browse failed: {e}")
+
+
 # ── Generate ──────────────────────────────────────────────────────────────
 
 @router.post("/generate")

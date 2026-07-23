@@ -39,7 +39,19 @@ export default function MaintenanceGeneratePage() {
   const [reportId, setReportId] = useState(null)
   const [downloading, setDownloading] = useState(null)
 
+  // Manual Drive browser -- fallback for photos the auto-search misses (e.g. a
+  // typo in the WhatsApp caption sent them to the wrong/_Unsorted folder).
+  const [browseOpen, setBrowseOpen] = useState(false)
+  const [browseStack, setBrowseStack] = useState([]) // [{id, name}], empty = root
+  const [browseFolders, setBrowseFolders] = useState([])
+  const [browseImages, setBrowseImages] = useState([])
+  const [browseLoading, setBrowseLoading] = useState(false)
+  const [browseError, setBrowseError] = useState('')
+  const [browseThumbUrls, setBrowseThumbUrls] = useState({})
+  const [browseSelectedIds, setBrowseSelectedIds] = useState(new Set())
+
   const thumbUrlsRef = useRef({})
+  const browseThumbUrlsRef = useRef({})
   const generatingRef = useRef(false)
   const downloadingRef = useRef(false)
 
@@ -55,8 +67,13 @@ export default function MaintenanceGeneratePage() {
   }, [thumbUrls])
 
   useEffect(() => {
+    browseThumbUrlsRef.current = browseThumbUrls
+  }, [browseThumbUrls])
+
+  useEffect(() => {
     return () => {
       Object.values(thumbUrlsRef.current).forEach((url) => URL.revokeObjectURL(url))
+      Object.values(browseThumbUrlsRef.current).forEach((url) => URL.revokeObjectURL(url))
     }
   }, [])
 
@@ -151,6 +168,95 @@ export default function MaintenanceGeneratePage() {
       else next.add(fileId)
       return next
     })
+  }
+
+  // ── Manual Drive browser (fallback when auto-search misses photos) ────────
+
+  function guessDateForImage(name, stack) {
+    const fromName = name.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (fromName) return fromName[1]
+    const dateCrumb = [...stack].reverse().find((c) => /^\d{4}-\d{2}-\d{2}$/.test(c.name))
+    return dateCrumb ? dateCrumb.name : ''
+  }
+
+  async function loadBrowseFolder(stack) {
+    setBrowseLoading(true)
+    setBrowseError('')
+    setBrowseSelectedIds(new Set())
+    try {
+      const folderId = stack.length ? stack[stack.length - 1].id : ''
+      const res = await api.get('/maintenance/drive/browse', { params: { folder_id: folderId } })
+      setBrowseFolders(res.data.folders || [])
+      setBrowseImages(res.data.images || [])
+
+      const THUMB_BATCH_SIZE = 8
+      const images = res.data.images || []
+      for (let i = 0; i < images.length; i += THUMB_BATCH_SIZE) {
+        const batch = images.slice(i, i + THUMB_BATCH_SIZE)
+        const batchUrls = {}
+        await Promise.all(batch.map(async (img) => {
+          try {
+            const imgRes = await api.get(`/maintenance/photo/${img.file_id}`, { responseType: 'blob' })
+            batchUrls[img.file_id] = URL.createObjectURL(imgRes.data)
+          } catch {
+            // leave missing
+          }
+        }))
+        setBrowseThumbUrls((prev) => ({ ...prev, ...batchUrls }))
+      }
+    } catch (err) {
+      setBrowseError(err.response?.data?.detail || 'Could not browse Drive.')
+    } finally {
+      setBrowseLoading(false)
+    }
+  }
+
+  function openBrowser() {
+    setBrowseOpen(true)
+    setBrowseStack([])
+    loadBrowseFolder([])
+  }
+
+  function navigateInto(folder) {
+    const next = [...browseStack, folder]
+    setBrowseStack(next)
+    loadBrowseFolder(next)
+  }
+
+  function navigateToBreadcrumb(index) {
+    // index -1 = root
+    const next = index < 0 ? [] : browseStack.slice(0, index + 1)
+    setBrowseStack(next)
+    loadBrowseFolder(next)
+  }
+
+  function toggleBrowseSelect(fileId) {
+    setBrowseSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(fileId)) next.delete(fileId)
+      else next.add(fileId)
+      return next
+    })
+  }
+
+  function addSelectedFromBrowse() {
+    const toAdd = browseImages
+      .filter((img) => browseSelectedIds.has(img.file_id))
+      .map((img) => ({ file_id: img.file_id, name: img.name, date: guessDateForImage(img.name, browseStack) }))
+
+    setPhotos((prev) => {
+      const existingIds = new Set(prev.map((p) => p.file_id))
+      return [...prev, ...toAdd.filter((p) => !existingIds.has(p.file_id))]
+    })
+    setSelectedIds((prev) => new Set([...prev, ...toAdd.map((p) => p.file_id)]))
+    setThumbUrls((prev) => {
+      const next = { ...prev }
+      for (const img of toAdd) {
+        if (browseThumbUrls[img.file_id]) next[img.file_id] = browseThumbUrls[img.file_id]
+      }
+      return next
+    })
+    setBrowseSelectedIds(new Set())
   }
 
   async function handleGenerate() {
@@ -303,6 +409,87 @@ export default function MaintenanceGeneratePage() {
             {searching ? 'Searching Drive…' : 'Find Photos'}
           </button>
           {searchError && <p className="text-sm text-red-600 mt-2">{searchError}</p>}
+
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            {!browseOpen ? (
+              <button className="text-sm text-blue-700 font-medium" onClick={openBrowser}>
+                Can't find your photos? Browse Drive manually →
+              </button>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm text-gray-600">
+                    Some photos land in the wrong folder if the WhatsApp caption had a typo — browse for them here instead.
+                  </p>
+                  <button className="text-xs text-gray-500 font-medium whitespace-nowrap ml-3" onClick={() => setBrowseOpen(false)}>Close</button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1 text-sm mb-3">
+                  <button className="text-blue-700 hover:underline" onClick={() => navigateToBreadcrumb(-1)}>Drive Root</button>
+                  {browseStack.map((crumb, i) => (
+                    <span key={crumb.id} className="flex items-center gap-1">
+                      <span className="text-gray-400">/</span>
+                      <button className="text-blue-700 hover:underline" onClick={() => navigateToBreadcrumb(i)}>{crumb.name}</button>
+                    </span>
+                  ))}
+                </div>
+
+                {browseLoading && <p className="text-sm text-gray-400">Loading…</p>}
+                {browseError && <p className="text-sm text-red-600">{browseError}</p>}
+
+                {!browseLoading && !browseError && (
+                  <>
+                    {browseFolders.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {browseFolders.map((folder) => (
+                          <button
+                            key={folder.id}
+                            onClick={() => navigateInto(folder)}
+                            className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50"
+                          >
+                            📁 {folder.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {browseImages.length > 0 && (
+                      <>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-3">
+                          {browseImages.map((img) => (
+                            <label key={img.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${browseSelectedIds.has(img.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
+                              <input
+                                type="checkbox"
+                                className="absolute top-1.5 left-1.5 w-4 h-4 z-10"
+                                checked={browseSelectedIds.has(img.file_id)}
+                                onChange={() => toggleBrowseSelect(img.file_id)}
+                              />
+                              {browseThumbUrls[img.file_id] ? (
+                                <img src={browseThumbUrls[img.file_id]} alt={img.name} className="w-full h-28 object-cover" />
+                              ) : (
+                                <div className="w-full h-28 bg-gray-100 flex items-center justify-center text-xs text-gray-400">Loading…</div>
+                              )}
+                            </label>
+                          ))}
+                        </div>
+                        <button
+                          className="btn-secondary text-sm"
+                          onClick={addSelectedFromBrowse}
+                          disabled={browseSelectedIds.size === 0}
+                        >
+                          Add {browseSelectedIds.size} Selected to Report
+                        </button>
+                      </>
+                    )}
+
+                    {browseFolders.length === 0 && browseImages.length === 0 && (
+                      <p className="text-sm text-gray-400">This folder is empty.</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
