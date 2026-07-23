@@ -278,6 +278,14 @@ export default function MaintenanceGeneratePage() {
         photos: selectedPhotos,
       })
       setReportId(res.data.report_id)
+
+      // The backend just persisted this address onto the project -- keep the
+      // locally-cached project list in sync so it prefills correctly if this
+      // project is picked again later in the same session, without a reload.
+      if (address) {
+        setSelectedProject((p) => (p ? { ...p, address } : p))
+        setProjects((prev) => prev.map((p) => (p.id === selectedProject.id ? { ...p, address } : p)))
+      }
     } catch (err) {
       setGenerateError(err.response?.data?.detail || 'Generation failed.')
     } finally {

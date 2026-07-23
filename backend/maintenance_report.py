@@ -133,6 +133,31 @@ def generate(body: dict, db: Session = Depends(get_db), current_user: User = Dep
     return {"report_id": report.id}
 
 
+# ── History ───────────────────────────────────────────────────────────────
+
+@router.get("/history")
+def history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    reports = (
+        db.query(MaintenanceReport)
+        .filter(MaintenanceReport.user_id == current_user.id)
+        .order_by(MaintenanceReport.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "project_name": r.project.name,
+            "project_code": r.project.code,
+            "date_from": r.date_from,
+            "date_to": r.date_to,
+            "photo_count": len(r.photos or []),
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in reports
+    ]
+
+
 # ── Download ──────────────────────────────────────────────────────────────
 
 def _get_report(report_id: int, current_user: User, db: Session) -> MaintenanceReport:
