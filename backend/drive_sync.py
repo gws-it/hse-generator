@@ -226,6 +226,146 @@ def _sync_project_type(project_type: str, files: list[dict], db, creds, api_key:
     return True
 
 
+# ── Maintenance-report photo search ────────────────────────────────────────
+# The Photo-to-Drive bot organizes its Shared Drive as
+# <date YYYY-MM-DD>/<"<code> - <name>">/<photo>. There's no efficient way to
+# query "descendants of folder X" in the Drive API, so instead we search
+# globally for folders matching that exact name (assumes the service account
+# only has access to Drives relevant to this app, so a global name search
+# won't collide with an unrelated folder that happens to share the name).
+
+def _escape_query(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def find_project_folders(code: str, name: str, service=None) -> list[dict]:
+    """Find every Drive folder named '<code> - <name>' (the bot's project-folder
+    naming convention). Returns [{id, name, parents}]."""
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot search Drive")
+    if service is None:
+        from googleapiclient.discovery import build
+        service = build("drive", "v3", credentials=creds)
+
+    folder_name = _escape_query(f"{code} - {name}")
+    q = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    result = service.files().list(
+        q=q,
+        fields="files(id,name,parents)",
+        corpora="allDrives",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+    ).execute()
+    return result.get("files", [])
+
+
+def list_project_photos(code: str, name: str, date_from: str, date_to: str) -> list[dict]:
+    """
+    Return [{file_id, name, date}] for every image in this project's Drive
+    folders whose parent date-folder (format YYYY-MM-DD) falls within
+    [date_from, date_to] inclusive.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot search Drive")
+    from googleapiclient.discovery import build
+    service = build("drive", "v3", credentials=creds)
+
+    photos = []
+    for folder in find_project_folders(code, name, service):
+        parents = folder.get("parents") or []
+        if not parents:
+            continue
+        try:
+            date_meta = service.files().get(
+                fileId=parents[0], fields="name", supportsAllDrives=True
+            ).execute()
+        except Exception as e:
+            logger.warning(f"Drive: could not resolve date folder for {folder['name']}: {e}")
+            continue
+        date_str = date_meta.get("name", "")
+        if not date_str or not (date_from <= date_str <= date_to):
+            continue
+
+        q = f"'{folder['id']}' in parents and mimeType contains 'image/' and trashed=false"
+        res = service.files().list(
+            q=q, fields="files(id,name)",
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        for f in res.get("files", []):
+            photos.append({"file_id": f["id"], "name": f["name"], "date": date_str})
+
+    photos.sort(key=lambda p: (p["date"], p["name"]))
+    return photos
+
+
+def download_file(file_id: str) -> bytes:
+    """Download an arbitrary Drive file (e.g. a maintenance photo) by ID, full resolution."""
+    return _download(file_id, _get_creds(), _get_api_key())
+
+
+PHOTO_DRIVE_ROOT_FOLDER_ID = os.getenv("PHOTO_DRIVE_ROOT_FOLDER_ID", "")
+
+
+def browse_folder(folder_id: str = "") -> dict:
+    """
+    List the subfolders and images directly inside a Drive folder (defaults to
+    the bot's Drive root if no folder_id given). Manual fallback for when a
+    project's photos don't turn up in list_project_photos -- e.g. a typo in the
+    WhatsApp caption sent it to the wrong folder, or _Unsorted.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot browse Drive")
+
+    root = folder_id or PHOTO_DRIVE_ROOT_FOLDER_ID
+    if not root:
+        raise ValueError("PHOTO_DRIVE_ROOT_FOLDER_ID not configured -- cannot browse Drive")
+
+    from googleapiclient.discovery import build
+    service = build("drive", "v3", credentials=creds)
+
+    res = service.files().list(
+        q=f"'{root}' in parents and trashed=false",
+        fields="files(id,name,mimeType)",
+        orderBy="name desc",
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files", [])
+
+    folders = [{"id": f["id"], "name": f["name"]} for f in files
+               if f["mimeType"] == "application/vnd.google-apps.folder"]
+    images = [{"file_id": f["id"], "name": f["name"]} for f in files
+              if f["mimeType"].startswith("image/")]
+    return {"folders": folders, "images": images}
+
+
+def get_thumbnail(file_id: str) -> bytes:
+    """
+    Fetch Drive's pre-generated small thumbnail for a file instead of the full-
+    resolution original -- used for the photo picker grid, where dozens of
+    photos may be shown at once and full downloads would be far too slow.
+    Falls back to the full download if no thumbnail is available.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot fetch thumbnail")
+    from googleapiclient.discovery import build
+    service = build("drive", "v3", credentials=creds)
+
+    meta = service.files().get(
+        fileId=file_id, fields="thumbnailLink", supportsAllDrives=True
+    ).execute()
+    thumbnail_link = meta.get("thumbnailLink")
+    if thumbnail_link:
+        resp = requests.get(thumbnail_link, timeout=15)
+        if resp.ok:
+            return resp.content
+
+    return download_file(file_id)
+
+
 def sync_templates(db) -> list[dict]:
     """
     Sync template files from Google Drive into the Template DB table.

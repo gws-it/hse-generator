@@ -73,3 +73,38 @@ class GenerationVersion(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     generation = relationship("Generation", back_populates="versions")
+
+
+class Project(Base):
+    """
+    Maintenance-report project directory. Mirrors (but is independent from) the
+    Photo-to-Drive bot's config/projects.txt -- 'code' + 'name' together must match
+    that bot's project folder naming ("<code> - <name>") for Drive photo search to
+    find the right folders. Adding a project here does NOT update the bot's list.
+    """
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(50), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
+    address = Column(String(500))
+    client = Column(String(255))  # client / main contractor, from the project masterlist
+    project_type = Column(String(100))  # e.g. "Green Roof" -- determines checklist item set
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MaintenanceReport(Base):
+    """A generated checklist + photo report for one maintenance visit/period."""
+    __tablename__ = "maintenance_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    date_from = Column(String(20))
+    date_to = Column(String(20))
+    address = Column(String(500))  # as entered at generation time -- may differ from Project.address later
+    photos = Column(JSON, default=list)  # ordered [{file_id, name, date}], date="YYYY-MM-DD"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project")
+    user = relationship("User")

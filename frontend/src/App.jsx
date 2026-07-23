@@ -5,6 +5,8 @@ import GeneratePage from './pages/GeneratePage'
 import HistoryPage from './pages/HistoryPage'
 import TemplatesPage from './pages/TemplatesPage'
 import PhotoBotPage from './pages/PhotoBotPage'
+import MaintenanceGeneratePage from './pages/MaintenanceGeneratePage'
+import MaintenanceHistoryPage from './pages/MaintenanceHistoryPage'
 import Navbar from './components/Navbar'
 
 function PrivateRoute({ children }) {
@@ -16,6 +18,11 @@ const whseNavLinks = [
   { to: '/whse/generate', label: 'Generate' },
   { to: '/whse/history', label: 'History' },
   { to: '/whse/templates', label: 'Templates' },
+]
+
+const maintenanceNavLinks = [
+  { to: '/maintenance/generate', label: 'Generate' },
+  { to: '/maintenance/history', label: 'History' },
 ]
 
 export default function App() {
@@ -65,6 +72,25 @@ export default function App() {
             <PrivateRoute>
               <Navbar title="Photo to Drive Bot" links={[]} />
               <PhotoBotPage />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/maintenance/generate"
+          element={
+            <PrivateRoute>
+              <Navbar title="Maintenance Report Generator" links={maintenanceNavLinks} />
+              <MaintenanceGeneratePage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/maintenance/history"
+          element={
+            <PrivateRoute>
+              <Navbar title="Maintenance Report Generator" links={maintenanceNavLinks} />
+              <MaintenanceHistoryPage />
             </PrivateRoute>
           }
         />

@@ -1,8 +1,6 @@
 import os
 import io
 import json
-import subprocess
-import tempfile
 import threading
 import uuid
 from datetime import datetime
@@ -25,8 +23,10 @@ from parse_mos import parse_file, parse_google_doc
 from generate import extract_project_details, generate_ra_swp, _generate_ra, _generate_swp
 from create_ra import build_ra_docx
 from create_swp import build_swp_docx
+from pdf_convert import convert_docx_to_pdf
 import drive_sync
 import photobot_proxy
+import maintenance_report
 
 app = FastAPI(title="HSE Report Generator", version="1.0.0")
 
@@ -42,6 +42,7 @@ app.add_middleware(
 )
 
 app.include_router(photobot_proxy.router)
+app.include_router(maintenance_report.router)
 
 
 @app.get("/api/config")
@@ -444,7 +445,7 @@ def download_ra_pdf(generation_id: int, db: Session = Depends(get_db), current_u
     gen = _get_gen(generation_id, current_user, db)
     logo = drive_sync.get_logo_bytes()
     docx_bytes = build_ra_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("ra", {}), logo)
-    pdf_bytes = _convert_to_pdf(docx_bytes)
+    pdf_bytes = convert_docx_to_pdf(docx_bytes)
     fname = f"RA_{gen.project_name or 'report'}.pdf".replace(" ", "_")
     _auto_save_template(gen, db)
     return StreamingResponse(
@@ -459,7 +460,7 @@ def download_swp_pdf(generation_id: int, db: Session = Depends(get_db), current_
     gen = _get_gen(generation_id, current_user, db)
     logo = drive_sync.get_logo_bytes()
     docx_bytes = build_swp_docx(_project_details_from_gen(gen), gen.ra_swp_json.get("swp", {}), logo)
-    pdf_bytes = _convert_to_pdf(docx_bytes)
+    pdf_bytes = convert_docx_to_pdf(docx_bytes)
     fname = f"SWP_{gen.project_name or 'report'}.pdf".replace(" ", "_")
     _auto_save_template(gen, db)
     return StreamingResponse(
@@ -502,7 +503,7 @@ def download_version(
     docx_bytes = builder(_project_details_from_gen(gen), (content or {}).get(doc, {}), logo)
 
     if fmt == "pdf":
-        file_bytes = _convert_to_pdf(docx_bytes)
+        file_bytes = convert_docx_to_pdf(docx_bytes)
         media_type = "application/pdf"
     else:
         file_bytes = docx_bytes
@@ -544,20 +545,6 @@ def _auto_save_template(gen: Generation, db: Session):
         db.commit()
     except Exception as e:
         print(f"[WARNING] Auto-save template failed: {e}")
-
-
-def _convert_to_pdf(docx_bytes: bytes) -> bytes:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        docx_path = os.path.join(tmpdir, "doc.docx")
-        with open(docx_path, "wb") as f:
-            f.write(docx_bytes)
-        subprocess.run(
-            ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", tmpdir, docx_path],
-            check=True, capture_output=True, timeout=60,
-        )
-        pdf_path = os.path.join(tmpdir, "doc.pdf")
-        with open(pdf_path, "rb") as f:
-            return f.read()
 
 
 # ── Drive Sync ────────────────────────────────────────────────────────────
