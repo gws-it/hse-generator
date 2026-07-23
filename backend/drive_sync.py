@@ -341,6 +341,73 @@ def browse_folder(folder_id: str = "") -> dict:
     return {"folders": folders, "images": images}
 
 
+def browse_flat(date_from: str, date_to: str) -> list[dict]:
+    """
+    List every photo across every folder within [date_from, date_to] (inclusive,
+    'YYYY-MM-DD'), grouped by (date, folder_name) -- a flat alternative to
+    browse_folder() for when clicking through folders one at a time to find a
+    project's misfiled photos is too slow. Fetches date folders' subfolders and
+    each subfolder's images concurrently to keep this reasonably fast.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot browse Drive")
+    root = PHOTO_DRIVE_ROOT_FOLDER_ID
+    if not root:
+        raise ValueError("PHOTO_DRIVE_ROOT_FOLDER_ID not configured -- cannot browse Drive")
+
+    from googleapiclient.discovery import build
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _service():
+        # Built fresh per call/thread -- googleapiclient service objects (and the
+        # httplib2 transport underneath) aren't safe to share across threads.
+        return build("drive", "v3", credentials=creds)
+
+    top = _service().files().list(
+        q=f"'{root}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        fields="files(id,name)",
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    date_folders = [f for f in top.get("files", []) if date_from <= f["name"] <= date_to]
+
+    def list_children(parent_id, mime_filter=None):
+        svc = _service()
+        q = f"'{parent_id}' in parents and trashed=false"
+        if mime_filter == "folder":
+            q += " and mimeType='application/vnd.google-apps.folder'"
+        elif mime_filter == "image":
+            q += " and mimeType contains 'image/'"
+        res = svc.files().list(
+            q=q, fields="files(id,name)",
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        return res.get("files", [])
+
+    def process_date_folder(date_folder):
+        groups = []
+        subfolders = list_children(date_folder["id"], "folder")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            images_by_folder = list(pool.map(lambda sf: list_children(sf["id"], "image"), subfolders))
+        for subfolder, images in zip(subfolders, images_by_folder):
+            if not images:
+                continue
+            groups.append({
+                "date": date_folder["name"],
+                "folder_name": subfolder["name"],
+                "photos": [{"file_id": f["id"], "name": f["name"]} for f in images],
+            })
+        return groups
+
+    all_groups = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for groups in pool.map(process_date_folder, date_folders):
+            all_groups.extend(groups)
+
+    all_groups.sort(key=lambda g: (g["date"], g["folder_name"]))
+    return all_groups
+
+
 def get_thumbnail(file_id: str) -> bytes:
     """
     Fetch Drive's pre-generated small thumbnail for a file instead of the full-

@@ -64,9 +64,11 @@ Google Cloud Console → APIs & Services → Credentials → the OAuth Client ID
 
 ## Branching & deployment
 
-- `main` = production, auto-deploys to the `production` Railway environment. **Never merge to `main` without explicit sign-off** — real users are on it.
+**Always commit and push to `dev`. Never commit or merge to `main` without explicit approval from the project owner first** — `main` is production, real users are on it, every single time, not just the first time.
+
+- `main` = production, auto-deploys to the `production` Railway environment.
 - `dev` = active development, auto-deploys to the `dev` Railway environment (its own database — schema changes need the same manual migration treatment as production).
-- Open a PR `dev → main` when a change is verified and ready to ship.
+- Once a change is verified on `dev` and you have approval to ship it, open a PR `dev → main` and merge.
 
 ## Related repository
 

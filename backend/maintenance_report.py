@@ -106,6 +106,22 @@ def browse_drive(folder_id: str = "", current_user: User = Depends(get_current_u
         raise HTTPException(502, f"Drive browse failed: {e}")
 
 
+@router.get("/drive/browse-flat")
+def browse_drive_flat(date_from: str, date_to: str, current_user: User = Depends(get_current_user)):
+    """
+    Flat alternative to /drive/browse -- lists every photo within the date
+    range across all folders, grouped by (date, folder_name), so the user
+    doesn't have to click through folders one at a time looking for misfiled
+    photos. Can be slow for wide date ranges (walks every date folder in range).
+    """
+    try:
+        return drive_sync.browse_flat(date_from, date_to)
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Drive browse failed: {e}")
+
+
 # ── Generate ──────────────────────────────────────────────────────────────
 
 @router.post("/generate")
