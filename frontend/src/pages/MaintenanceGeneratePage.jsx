@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import api from '../api'
+import { downloadReportFile } from '../downloadJob'
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -38,6 +39,7 @@ export default function MaintenanceGeneratePage() {
   const [generateError, setGenerateError] = useState('')
   const [reportId, setReportId] = useState(null)
   const [downloading, setDownloading] = useState(null)
+  const [downloadProgress, setDownloadProgress] = useState(null) // {pct, step} while downloading
 
   // Manual Drive browser -- fallback for photos the auto-search misses (e.g. a
   // typo in the WhatsApp caption sent them to the wrong/_Unsorted folder).
@@ -299,18 +301,15 @@ export default function MaintenanceGeneratePage() {
     if (downloadingRef.current) return
     downloadingRef.current = true
     setDownloading(key)
+    setDownloadProgress({ pct: 0, step: 'Starting…' })
     try {
-      const res = await api.get(`/maintenance/download/${reportId}/${doc}/${fmt}`, { responseType: 'blob' })
-      const url = URL.createObjectURL(new Blob([res.data]))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${doc}_${selectedProject?.name || 'report'}.${fmt}`.replace(/\s+/g, '_')
-      a.click()
-      URL.revokeObjectURL(url)
+      const filename = `${doc}_${selectedProject?.name || 'report'}.${fmt}`.replace(/\s+/g, '_')
+      await downloadReportFile(reportId, doc, fmt, filename, (pct, step) => setDownloadProgress({ pct, step }))
     } catch {
       alert('Download failed. Please try again.')
     } finally {
       setDownloading(null)
+      setDownloadProgress(null)
       downloadingRef.current = false
     }
   }
@@ -555,6 +554,21 @@ export default function MaintenanceGeneratePage() {
             <button className="btn-green text-sm" disabled={downloading === 'report-docx'} onClick={() => handleDownload('report', 'docx')}>⬇ Photo Report (Word)</button>
             <button className="btn-green text-sm" disabled={downloading === 'report-pdf'} onClick={() => handleDownload('report', 'pdf')}>⬇ Photo Report (PDF)</button>
           </div>
+
+          {downloadProgress && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                <span>{downloadProgress.step}</span>
+                <span>{downloadProgress.pct}%</span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-2">
+                <div
+                  className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${downloadProgress.pct}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
