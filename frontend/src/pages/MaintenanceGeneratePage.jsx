@@ -60,6 +60,7 @@ export default function MaintenanceGeneratePage() {
   const [flatGroups, setFlatGroups] = useState([]) // [{date, folder_name, photos}]
   const [flatLoading, setFlatLoading] = useState(false)
   const [flatError, setFlatError] = useState('')
+  const [expandedDates, setExpandedDates] = useState(new Set()) // date strings
   const [expandedGroups, setExpandedGroups] = useState(new Set()) // "date|folder_name"
   const [flatThumbUrls, setFlatThumbUrls] = useState({})
   const [flatSelectedIds, setFlatSelectedIds] = useState(new Set())
@@ -122,6 +123,19 @@ export default function MaintenanceGeneratePage() {
         p.code.toLowerCase().includes(search.toLowerCase())
       )
     : projects
+
+  // flatGroups (flat [{date, folder_name, photos}]) nested into
+  // [{date, folders: [{folder_name, photos}]}] for the date > folder collapse tree.
+  const groupedByDate = (() => {
+    const byDate = new Map()
+    for (const g of flatGroups) {
+      if (!byDate.has(g.date)) byDate.set(g.date, [])
+      byDate.get(g.date).push(g)
+    }
+    return [...byDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, folders]) => ({ date, folders }))
+  })()
 
   function pickProject(project) {
     setSelectedProject(project)
@@ -290,12 +304,22 @@ export default function MaintenanceGeneratePage() {
     return `${g.date}|${g.folder_name}`
   }
 
+  function toggleDateExpand(date) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev)
+      if (next.has(date)) next.delete(date)
+      else next.add(date)
+      return next
+    })
+  }
+
   async function openFlatList() {
     setBrowseOpen(false)
     setFlatOpen(true)
     setFlatLoading(true)
     setFlatError('')
     setFlatGroups([])
+    setExpandedDates(new Set())
     setExpandedGroups(new Set())
     setFlatSelectedIds(new Set())
     try {
@@ -638,55 +662,79 @@ export default function MaintenanceGeneratePage() {
                 {!flatLoading && !flatError && flatGroups.length > 0 && (
                   <>
                     <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg divide-y mb-3">
-                      {flatGroups.map((group) => {
-                        const key = groupKey(group)
-                        const isExpanded = expandedGroups.has(key)
-                        const selectedInGroup = group.photos.filter((p) => flatSelectedIds.has(p.file_id)).length
+                      {groupedByDate.map((dateGroup) => {
+                        const dateExpanded = expandedDates.has(dateGroup.date)
+                        const totalPhotosForDate = dateGroup.folders.reduce((n, f) => n + f.photos.length, 0)
+                        const selectedForDate = dateGroup.folders.reduce(
+                          (n, f) => n + f.photos.filter((p) => flatSelectedIds.has(p.file_id)).length, 0
+                        )
                         return (
-                          <div key={key}>
+                          <div key={dateGroup.date}>
                             <button
-                              onClick={() => toggleGroupExpand(group)}
-                              className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-gray-50 text-left"
+                              onClick={() => toggleDateExpand(dateGroup.date)}
+                              className="w-full flex items-center justify-between px-3 py-2.5 text-sm bg-white hover:bg-gray-50 text-left font-semibold"
                             >
                               <span>
-                                <span className="text-gray-400 mr-2">{isExpanded ? '▾' : '▸'}</span>
-                                <span className="font-medium text-gray-900">{group.date}</span>
-                                <span className="text-gray-600"> — {group.folder_name}</span>
+                                <span className="text-gray-400 mr-2">{dateExpanded ? '▾' : '▸'}</span>
+                                <span className="text-gray-900">{dateGroup.date}</span>
                               </span>
-                              <span className="text-xs text-gray-400 whitespace-nowrap ml-2">
-                                {selectedInGroup > 0 && <span className="text-blue-600 font-medium">{selectedInGroup} selected · </span>}
-                                {group.photos.length} photo{group.photos.length !== 1 ? 's' : ''}
+                              <span className="text-xs text-gray-400 font-normal whitespace-nowrap ml-2">
+                                {selectedForDate > 0 && <span className="text-blue-600 font-medium">{selectedForDate} selected · </span>}
+                                {dateGroup.folders.length} folder{dateGroup.folders.length !== 1 ? 's' : ''} · {totalPhotosForDate} photo{totalPhotosForDate !== 1 ? 's' : ''}
                               </span>
                             </button>
-                            {isExpanded && (
-                              <div className="p-3 bg-gray-50">
-                                <div className="flex gap-3 mb-2">
-                                  <button className="text-xs text-blue-700 font-medium" onClick={() => selectAllInGroup(group)}>
-                                    Select all {group.photos.length}
+
+                            {dateExpanded && dateGroup.folders.map((group) => {
+                              const key = groupKey(group)
+                              const isExpanded = expandedGroups.has(key)
+                              const selectedInGroup = group.photos.filter((p) => flatSelectedIds.has(p.file_id)).length
+                              return (
+                                <div key={key} className="border-t border-gray-100">
+                                  <button
+                                    onClick={() => toggleGroupExpand(group)}
+                                    className="w-full flex items-center justify-between pl-8 pr-3 py-2 text-sm hover:bg-gray-50 text-left"
+                                  >
+                                    <span>
+                                      <span className="text-gray-400 mr-2">{isExpanded ? '▾' : '▸'}</span>
+                                      <span className="text-gray-700">{group.folder_name}</span>
+                                    </span>
+                                    <span className="text-xs text-gray-400 whitespace-nowrap ml-2">
+                                      {selectedInGroup > 0 && <span className="text-blue-600 font-medium">{selectedInGroup} selected · </span>}
+                                      {group.photos.length} photo{group.photos.length !== 1 ? 's' : ''}
+                                    </span>
                                   </button>
-                                  <button className="text-xs text-gray-500 font-medium" onClick={() => clearGroupSelection(group)}>
-                                    Clear
-                                  </button>
+                                  {isExpanded && (
+                                    <div className="p-3 pl-8 bg-gray-50">
+                                      <div className="flex gap-3 mb-2">
+                                        <button className="text-xs text-blue-700 font-medium" onClick={() => selectAllInGroup(group)}>
+                                          Select all {group.photos.length}
+                                        </button>
+                                        <button className="text-xs text-gray-500 font-medium" onClick={() => clearGroupSelection(group)}>
+                                          Clear
+                                        </button>
+                                      </div>
+                                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                        {group.photos.map((photo) => (
+                                          <label key={photo.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${flatSelectedIds.has(photo.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
+                                            <input
+                                              type="checkbox"
+                                              className="absolute top-1.5 left-1.5 w-4 h-4 z-10"
+                                              checked={flatSelectedIds.has(photo.file_id)}
+                                              onChange={() => toggleFlatSelect(photo.file_id)}
+                                            />
+                                            {flatThumbUrls[photo.file_id] ? (
+                                              <img src={flatThumbUrls[photo.file_id]} alt={photo.name} className="w-full h-24 object-cover" />
+                                            ) : (
+                                              <div className="w-full h-24 bg-gray-200 flex items-center justify-center text-xs text-gray-400">Loading…</div>
+                                            )}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                                  {group.photos.map((photo) => (
-                                    <label key={photo.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${flatSelectedIds.has(photo.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
-                                      <input
-                                        type="checkbox"
-                                        className="absolute top-1.5 left-1.5 w-4 h-4 z-10"
-                                        checked={flatSelectedIds.has(photo.file_id)}
-                                        onChange={() => toggleFlatSelect(photo.file_id)}
-                                      />
-                                      {flatThumbUrls[photo.file_id] ? (
-                                        <img src={flatThumbUrls[photo.file_id]} alt={photo.name} className="w-full h-24 object-cover" />
-                                      ) : (
-                                        <div className="w-full h-24 bg-gray-200 flex items-center justify-center text-xs text-gray-400">Loading…</div>
-                                      )}
-                                    </label>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                              )
+                            })}
                           </div>
                         )
                       })}
