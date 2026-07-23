@@ -1,4 +1,7 @@
 import io
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,6 +16,10 @@ from create_maintenance_report import build_report_docx
 from pdf_convert import convert_docx_to_pdf
 
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
+
+# In-memory job store for the async download flow (progress reporting on
+# generation, which can take up to ~1 min for a report with many photos).
+jobs: dict = {}
 
 
 # ── Projects ────────────────────────────────────────────────────────────────
@@ -179,42 +186,136 @@ def _project_dict(project: Project, report: MaintenanceReport) -> dict:
     }
 
 
-@router.get("/download/{report_id}/{doc}/{fmt}")
-def download(
-    report_id: int, doc: str, fmt: str,
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
-):
-    if doc not in ("checklist", "report") or fmt not in ("docx", "pdf"):
-        raise HTTPException(400, "Invalid doc or format")
+def _build_document(report: MaintenanceReport, doc: str, fmt: str, on_progress=None):
+    """
+    Builds the requested document, returning (file_bytes, media_type, filename).
+    on_progress(percent, step_label), if given, is called as work proceeds --
+    the photo-fetch step (the slow part, ~1 min for a report with many photos)
+    is the only one where progress is meaningfully incremental.
+    """
+    def progress(pct, step):
+        if on_progress:
+            on_progress(pct, step)
 
-    report = _get_report(report_id, db)
     project = report.project
     logo = drive_sync.get_logo_bytes()
     project_dict = _project_dict(project, report)
 
     if doc == "checklist":
+        progress(50, "Building checklist…")
         maintenance_date = report.date_to or report.date_from or ""
         docx_bytes = build_checklist_docx(project_dict, maintenance_date, logo)
     else:
-        try:
-            photos = [
-                {"bytes": drive_sync.download_file(p["file_id"]), "date": p.get("date", "")}
-                for p in report.photos
-            ]
-        except Exception as e:
-            raise HTTPException(502, f"Could not fetch photos from Drive: {e}")
+        total = len(report.photos) or 1
+        photos_by_id = {}
+        # Photos were already downloaded once during generate(); download()
+        # re-fetches them fresh each time rather than storing large blobs in
+        # Postgres. Fetching them concurrently (was sequential) is the main
+        # fix for the ~1 min wait with no feedback.
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(drive_sync.download_file, p["file_id"]): p["file_id"] for p in report.photos}
+            done = 0
+            for future in as_completed(futures):
+                photos_by_id[futures[future]] = future.result()
+                done += 1
+                progress(int(done / total * 70), f"Fetching photo {done} of {total}…")
+        photos = [{"bytes": photos_by_id[p["file_id"]], "date": p.get("date", "")} for p in report.photos]
+        progress(80, "Building report document…")
         docx_bytes = build_report_docx(project_dict, photos, logo)
 
     if fmt == "pdf":
+        progress(90, "Converting to PDF…")
         file_bytes = convert_docx_to_pdf(docx_bytes)
         media_type = "application/pdf"
     else:
         file_bytes = docx_bytes
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
+    progress(100, "Done")
     fname = f"{doc}_{project.name}.{fmt}".replace(" ", "_")
+    return file_bytes, media_type, fname
+
+
+@router.get("/download/{report_id}/{doc}/{fmt}")
+def download(
+    report_id: int, doc: str, fmt: str,
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    """Direct synchronous download -- kept for stable direct links. The
+    frontend uses the async /download-start + /jobs flow below instead, for
+    progress reporting."""
+    if doc not in ("checklist", "report") or fmt not in ("docx", "pdf"):
+        raise HTTPException(400, "Invalid doc or format")
+
+    report = _get_report(report_id, db)
+    try:
+        file_bytes, media_type, fname = _build_document(report, doc, fmt)
+    except Exception as e:
+        raise HTTPException(502, f"Could not build document: {e}")
+
     return StreamingResponse(
         io.BytesIO(file_bytes),
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.post("/download-start/{report_id}/{doc}/{fmt}")
+def download_start(
+    report_id: int, doc: str, fmt: str,
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    """Start document generation in the background, returning a job_id to poll
+    for progress -- avoids the ~1 min blind wait of the direct download."""
+    if doc not in ("checklist", "report") or fmt not in ("docx", "pdf"):
+        raise HTTPException(400, "Invalid doc or format")
+
+    report = _get_report(report_id, db)  # validate it exists before backgrounding
+    captured_report_id = report.id
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "processing", "progress": 0, "step": "Starting…", "error": None}
+
+    def run():
+        try:
+            from database import SessionLocal
+            db2 = SessionLocal()
+            try:
+                report2 = db2.query(MaintenanceReport).filter(MaintenanceReport.id == captured_report_id).first()
+                file_bytes, media_type, fname = _build_document(
+                    report2, doc, fmt,
+                    on_progress=lambda pct, step: jobs.__setitem__(
+                        job_id, {**jobs[job_id], "progress": pct, "step": step}
+                    ),
+                )
+                jobs[job_id] = {
+                    "status": "done", "progress": 100, "step": "Done", "error": None,
+                    "file_bytes": file_bytes, "media_type": media_type, "filename": fname,
+                }
+            finally:
+                db2.close()
+        except Exception as e:
+            jobs[job_id] = {"status": "error", "progress": 0, "step": "", "error": str(e)}
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id}
+
+
+@router.get("/jobs/{job_id}")
+def get_job(job_id: str, current_user: User = Depends(get_current_user)):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return {k: v for k, v in job.items() if k != "file_bytes"}
+
+
+@router.get("/jobs/{job_id}/file")
+def get_job_file(job_id: str, current_user: User = Depends(get_current_user)):
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "done":
+        raise HTTPException(404, "File not ready")
+    return StreamingResponse(
+        io.BytesIO(job["file_bytes"]),
+        media_type=job["media_type"],
+        headers={"Content-Disposition": f'attachment; filename="{job["filename"]}"'},
     )
