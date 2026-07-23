@@ -335,6 +335,18 @@ export default function MaintenanceGeneratePage() {
     })
   }
 
+  function selectAllInGroup(group) {
+    setFlatSelectedIds((prev) => new Set([...prev, ...group.photos.map((p) => p.file_id)]))
+  }
+
+  function clearGroupSelection(group) {
+    setFlatSelectedIds((prev) => {
+      const next = new Set(prev)
+      group.photos.forEach((p) => next.delete(p.file_id))
+      return next
+    })
+  }
+
   function addSelectedFromFlat() {
     const toAdd = []
     for (const group of flatGroups) {
@@ -566,6 +578,14 @@ export default function MaintenanceGeneratePage() {
 
                     {browseImages.length > 0 && (
                       <>
+                        <div className="flex gap-3 mb-2">
+                          <button className="text-xs text-blue-700 font-medium" onClick={() => setBrowseSelectedIds(new Set(browseImages.map((i) => i.file_id)))}>
+                            Select all {browseImages.length}
+                          </button>
+                          <button className="text-xs text-gray-500 font-medium" onClick={() => setBrowseSelectedIds(new Set())}>
+                            Clear
+                          </button>
+                        </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-3">
                           {browseImages.map((img) => (
                             <label key={img.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${browseSelectedIds.has(img.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
@@ -639,22 +659,32 @@ export default function MaintenanceGeneratePage() {
                               </span>
                             </button>
                             {isExpanded && (
-                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-3 bg-gray-50">
-                                {group.photos.map((photo) => (
-                                  <label key={photo.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${flatSelectedIds.has(photo.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
-                                    <input
-                                      type="checkbox"
-                                      className="absolute top-1.5 left-1.5 w-4 h-4 z-10"
-                                      checked={flatSelectedIds.has(photo.file_id)}
-                                      onChange={() => toggleFlatSelect(photo.file_id)}
-                                    />
-                                    {flatThumbUrls[photo.file_id] ? (
-                                      <img src={flatThumbUrls[photo.file_id]} alt={photo.name} className="w-full h-24 object-cover" />
-                                    ) : (
-                                      <div className="w-full h-24 bg-gray-200 flex items-center justify-center text-xs text-gray-400">Loading…</div>
-                                    )}
-                                  </label>
-                                ))}
+                              <div className="p-3 bg-gray-50">
+                                <div className="flex gap-3 mb-2">
+                                  <button className="text-xs text-blue-700 font-medium" onClick={() => selectAllInGroup(group)}>
+                                    Select all {group.photos.length}
+                                  </button>
+                                  <button className="text-xs text-gray-500 font-medium" onClick={() => clearGroupSelection(group)}>
+                                    Clear
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                  {group.photos.map((photo) => (
+                                    <label key={photo.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${flatSelectedIds.has(photo.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
+                                      <input
+                                        type="checkbox"
+                                        className="absolute top-1.5 left-1.5 w-4 h-4 z-10"
+                                        checked={flatSelectedIds.has(photo.file_id)}
+                                        onChange={() => toggleFlatSelect(photo.file_id)}
+                                      />
+                                      {flatThumbUrls[photo.file_id] ? (
+                                        <img src={flatThumbUrls[photo.file_id]} alt={photo.name} className="w-full h-24 object-cover" />
+                                      ) : (
+                                        <div className="w-full h-24 bg-gray-200 flex items-center justify-center text-xs text-gray-400">Loading…</div>
+                                      )}
+                                    </label>
+                                  ))}
+                                </div>
                               </div>
                             )}
                           </div>
