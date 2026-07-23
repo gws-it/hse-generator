@@ -107,3 +107,4 @@ class MaintenanceReport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project")
+    user = relationship("User")

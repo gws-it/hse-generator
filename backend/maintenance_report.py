@@ -134,12 +134,14 @@ def generate(body: dict, db: Session = Depends(get_db), current_user: User = Dep
 
 
 # ── History ───────────────────────────────────────────────────────────────
+# Shared across all users (not just whoever generated it) -- these are
+# operational documents the whole team needs access to, unlike WHSE's
+# per-user RA/SWP history.
 
 @router.get("/history")
 def history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     reports = (
         db.query(MaintenanceReport)
-        .filter(MaintenanceReport.user_id == current_user.id)
         .order_by(MaintenanceReport.created_at.desc())
         .limit(100)
         .all()
@@ -153,6 +155,7 @@ def history(db: Session = Depends(get_db), current_user: User = Depends(get_curr
             "date_to": r.date_to,
             "photo_count": len(r.photos or []),
             "created_at": r.created_at.isoformat(),
+            "generated_by": r.user.name or r.user.email,
         }
         for r in reports
     ]
@@ -160,11 +163,8 @@ def history(db: Session = Depends(get_db), current_user: User = Depends(get_curr
 
 # ── Download ──────────────────────────────────────────────────────────────
 
-def _get_report(report_id: int, current_user: User, db: Session) -> MaintenanceReport:
-    report = db.query(MaintenanceReport).filter(
-        MaintenanceReport.id == report_id,
-        MaintenanceReport.user_id == current_user.id,
-    ).first()
+def _get_report(report_id: int, db: Session) -> MaintenanceReport:
+    report = db.query(MaintenanceReport).filter(MaintenanceReport.id == report_id).first()
     if not report:
         raise HTTPException(404, "Report not found")
     return report
@@ -187,7 +187,7 @@ def download(
     if doc not in ("checklist", "report") or fmt not in ("docx", "pdf"):
         raise HTTPException(400, "Invalid doc or format")
 
-    report = _get_report(report_id, current_user, db)
+    report = _get_report(report_id, db)
     project = report.project
     logo = drive_sync.get_logo_bytes()
     project_dict = _project_dict(project, report)
