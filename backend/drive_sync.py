@@ -301,8 +301,33 @@ def list_project_photos(code: str, name: str, date_from: str, date_to: str) -> l
 
 
 def download_file(file_id: str) -> bytes:
-    """Download an arbitrary Drive file (e.g. a maintenance photo) by ID."""
+    """Download an arbitrary Drive file (e.g. a maintenance photo) by ID, full resolution."""
     return _download(file_id, _get_creds(), _get_api_key())
+
+
+def get_thumbnail(file_id: str) -> bytes:
+    """
+    Fetch Drive's pre-generated small thumbnail for a file instead of the full-
+    resolution original -- used for the photo picker grid, where dozens of
+    photos may be shown at once and full downloads would be far too slow.
+    Falls back to the full download if no thumbnail is available.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot fetch thumbnail")
+    from googleapiclient.discovery import build
+    service = build("drive", "v3", credentials=creds)
+
+    meta = service.files().get(
+        fileId=file_id, fields="thumbnailLink", supportsAllDrives=True
+    ).execute()
+    thumbnail_link = meta.get("thumbnailLink")
+    if thumbnail_link:
+        resp = requests.get(thumbnail_link, timeout=15)
+        if resp.ok:
+            return resp.content
+
+    return download_file(file_id)
 
 
 def sync_templates(db) -> list[dict]:

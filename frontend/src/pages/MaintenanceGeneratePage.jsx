@@ -40,6 +40,8 @@ export default function MaintenanceGeneratePage() {
   const [downloading, setDownloading] = useState(null)
 
   const thumbUrlsRef = useRef({})
+  const generatingRef = useRef(false)
+  const downloadingRef = useRef(false)
 
   useEffect(() => {
     api.get('/maintenance/projects')
@@ -118,17 +120,23 @@ export default function MaintenanceGeneratePage() {
       setPhotos(found)
       setSelectedIds(new Set(found.map((p) => p.file_id)))
 
-      // Fetch thumbnails in parallel
-      const urls = {}
-      await Promise.all(found.map(async (photo) => {
-        try {
-          const imgRes = await api.get(`/maintenance/photo/${photo.file_id}`, { responseType: 'blob' })
-          urls[photo.file_id] = URL.createObjectURL(imgRes.data)
-        } catch {
-          // leave missing -- shows a placeholder
-        }
-      }))
-      setThumbUrls(urls)
+      // Fetch thumbnails in small batches (not all at once) -- with dozens/hundreds
+      // of photos, firing every request simultaneously overwhelms the connection
+      // and makes the grid appear to hang instead of loading progressively.
+      const THUMB_BATCH_SIZE = 8
+      for (let i = 0; i < found.length; i += THUMB_BATCH_SIZE) {
+        const batch = found.slice(i, i + THUMB_BATCH_SIZE)
+        const batchUrls = {}
+        await Promise.all(batch.map(async (photo) => {
+          try {
+            const imgRes = await api.get(`/maintenance/photo/${photo.file_id}`, { responseType: 'blob' })
+            batchUrls[photo.file_id] = URL.createObjectURL(imgRes.data)
+          } catch {
+            // leave missing -- shows a placeholder
+          }
+        }))
+        setThumbUrls((prev) => ({ ...prev, ...batchUrls }))
+      }
     } catch (err) {
       setSearchError(err.response?.data?.detail || 'Could not search Drive for photos.')
     } finally {
@@ -146,6 +154,12 @@ export default function MaintenanceGeneratePage() {
   }
 
   async function handleGenerate() {
+    // Guard with a ref, not just the `generating` state -- state updates are
+    // batched/async, so a fast double-click can otherwise start this twice
+    // before the button visually disables (this is what caused duplicate
+    // MaintenanceReport rows/downloads before).
+    if (generatingRef.current) return
+    generatingRef.current = true
     setGenerateError('')
     setGenerating(true)
     try {
@@ -154,6 +168,7 @@ export default function MaintenanceGeneratePage() {
         project_id: selectedProject.id,
         date_from: dateFrom,
         date_to: dateTo,
+        address,
         photos: selectedPhotos,
       })
       setReportId(res.data.report_id)
@@ -161,11 +176,14 @@ export default function MaintenanceGeneratePage() {
       setGenerateError(err.response?.data?.detail || 'Generation failed.')
     } finally {
       setGenerating(false)
+      generatingRef.current = false
     }
   }
 
   async function handleDownload(doc, fmt) {
     const key = `${doc}-${fmt}`
+    if (downloadingRef.current) return
+    downloadingRef.current = true
     setDownloading(key)
     try {
       const res = await api.get(`/maintenance/download/${reportId}/${doc}/${fmt}`, { responseType: 'blob' })
@@ -179,6 +197,7 @@ export default function MaintenanceGeneratePage() {
       alert('Download failed. Please try again.')
     } finally {
       setDownloading(null)
+      downloadingRef.current = false
     }
   }
 

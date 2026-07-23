@@ -4,6 +4,8 @@ from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 PHOTOS_PER_PAGE = 4  # laid out as a 2x2 grid, matching the sample report's density
 
@@ -32,6 +34,25 @@ def _format_session_dates(dates: list[str]) -> tuple[str, str]:
     else:
         day_str = ", ".join(days[:-1]) + f" and {days[-1]}"
     return month_label, f"{day_str} {month_label}"
+
+
+def _set_landscape(doc):
+    for section in doc.sections:
+        section.page_width, section.page_height = section.page_height, section.page_width
+        section.orientation = 1  # WD_ORIENT.LANDSCAPE
+        section.left_margin = Cm(1.5)
+        section.right_margin = Cm(1.5)
+        section.top_margin = Cm(1.2)
+        section.bottom_margin = Cm(1.2)
+
+
+def _prevent_row_split(row):
+    """Stop a table row (image + caption) from splitting across a page boundary --
+    without this, a photo can render on one page while its caption spills onto
+    the next."""
+    trPr = row._tr.get_or_add_trPr()
+    cant_split = OxmlElement("w:cantSplit")
+    trPr.append(cant_split)
 
 
 def _add_gws_header(doc, logo_bytes):
@@ -67,15 +88,26 @@ def build_report_docx(
     month_label, detail_label = _format_session_dates([p["date"] for p in photos if p.get("date")])
 
     doc = Document()
-    for section in doc.sections:
-        section.left_margin = Cm(1.5)
-        section.right_margin = Cm(1.5)
+    _set_landscape(doc)
 
     # ── Cover page ───────────────────────────────────────────────────────────
+    cover = doc.add_table(rows=1, cols=2)
+    client_cell, logo_cell = cover.rows[0].cells
+
+    client_lines = [line for line in [project.get("client"), project.get("address")] if line]
+    if client_lines:
+        cp = client_cell.paragraphs[0]
+        run = cp.add_run(client_lines[0])
+        run.bold = True
+        run.font.size = Pt(13)
+        for line in client_lines[1:]:
+            lp = client_cell.add_paragraph()
+            lp.add_run(line).font.size = Pt(10)
+
     if logo_bytes:
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        p.add_run().add_picture(io.BytesIO(logo_bytes), height=Cm(2.5))
+        lp = logo_cell.paragraphs[0]
+        lp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        lp.add_run().add_picture(io.BytesIO(logo_bytes), height=Cm(2.2))
 
     for _ in range(4):
         doc.add_paragraph()
@@ -118,10 +150,12 @@ def build_report_docx(
         rows = (len(page_photos) + 1) // 2
         grid = doc.add_table(rows=rows, cols=2)
         for i, photo in enumerate(page_photos):
-            cell = grid.rows[i // 2].cells[i % 2]
+            row = grid.rows[i // 2]
+            _prevent_row_split(row)
+            cell = row.cells[i % 2]
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=Cm(8.5))
+            p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=Cm(11))
             cap = cell.add_paragraph()
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             date_str = photo.get("date", "")

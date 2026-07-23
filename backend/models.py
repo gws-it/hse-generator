@@ -102,6 +102,7 @@ class MaintenanceReport(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     date_from = Column(String(20))
     date_to = Column(String(20))
+    address = Column(String(500))  # as entered at generation time -- may differ from Project.address later
     photos = Column(JSON, default=list)  # ordered [{file_id, name, date}], date="YYYY-MM-DD"
     created_at = Column(DateTime, default=datetime.utcnow)
 

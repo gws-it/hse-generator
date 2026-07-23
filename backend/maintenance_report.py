@@ -76,8 +76,9 @@ def project_photos(
 
 @router.get("/photo/{file_id}")
 def photo_preview(file_id: str, current_user: User = Depends(get_current_user)):
+    """Small thumbnail for the picker grid -- NOT the full-res image (see download())."""
     try:
-        data = drive_sync.download_file(file_id)
+        data = drive_sync.get_thumbnail(file_id)
     except Exception as e:
         raise HTTPException(502, f"Could not fetch photo: {e}")
     return StreamingResponse(io.BytesIO(data), media_type="image/jpeg")
@@ -90,6 +91,7 @@ def generate(body: dict, db: Session = Depends(get_db), current_user: User = Dep
     project_id = body.get("project_id")
     date_from = body.get("date_from", "")
     date_to = body.get("date_to", "")
+    address = (body.get("address") or "").strip()
     photos = body.get("photos", [])  # [{file_id, name, date}], as returned by the photos search endpoint
     if not project_id or not photos:
         raise HTTPException(400, "project_id and photos are required")
@@ -98,11 +100,16 @@ def generate(body: dict, db: Session = Depends(get_db), current_user: User = Dep
 
     project = _get_project(project_id, db)
 
+    # Keep Project.address in sync so it prefills correctly next time this project is used.
+    if address and project.address != address:
+        project.address = address
+
     report = MaintenanceReport(
         user_id=current_user.id,
         project_id=project.id,
         date_from=date_from,
         date_to=date_to,
+        address=address,
         photos=photos,
     )
     db.add(report)
@@ -123,8 +130,13 @@ def _get_report(report_id: int, current_user: User, db: Session) -> MaintenanceR
     return report
 
 
-def _project_dict(project: Project) -> dict:
-    return {"name": project.name, "address": project.address, "project_type": project.project_type}
+def _project_dict(project: Project, report: MaintenanceReport) -> dict:
+    return {
+        "name": project.name,
+        "address": report.address or project.address,
+        "client": project.client,
+        "project_type": project.project_type,
+    }
 
 
 @router.get("/download/{report_id}/{doc}/{fmt}")
@@ -138,10 +150,11 @@ def download(
     report = _get_report(report_id, current_user, db)
     project = report.project
     logo = drive_sync.get_logo_bytes()
+    project_dict = _project_dict(project, report)
 
     if doc == "checklist":
         maintenance_date = report.date_to or report.date_from or ""
-        docx_bytes = build_checklist_docx(_project_dict(project), maintenance_date, logo)
+        docx_bytes = build_checklist_docx(project_dict, maintenance_date, logo)
     else:
         try:
             photos = [
@@ -150,7 +163,7 @@ def download(
             ]
         except Exception as e:
             raise HTTPException(502, f"Could not fetch photos from Drive: {e}")
-        docx_bytes = build_report_docx(_project_dict(project), photos, logo)
+        docx_bytes = build_report_docx(project_dict, photos, logo)
 
     if fmt == "pdf":
         file_bytes = convert_docx_to_pdf(docx_bytes)
