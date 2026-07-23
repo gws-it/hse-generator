@@ -342,8 +342,16 @@ export default function MaintenanceGeneratePage() {
         </div>
       )}
 
+      {/* ── Generating ── */}
+      {generating && (
+        <div className="card flex items-center gap-3">
+          <div className="w-5 h-5 border-2 border-green-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+          <span className="text-sm font-medium text-gray-700">Generating report, please wait…</span>
+        </div>
+      )}
+
       {/* ── Download ── */}
-      {reportId && (
+      {reportId && !generating && (
         <div className="card">
           <h2 className="text-lg font-bold text-gray-900 mb-3">4. Download</h2>
           <div className="flex flex-wrap gap-2">
