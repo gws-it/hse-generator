@@ -6,10 +6,35 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.image.image import Image as DocxImage
 
 from create_maintenance_checklist import add_checklist_section
 
 PHOTOS_PER_PAGE = 4  # laid out as a 2x2 grid, matching the sample report's density
+
+# Bounding box each photo must fit within, so a 2x2 grid + captions always
+# fits on one landscape page regardless of source photo orientation -- a
+# portrait phone photo scaled by width alone (no height cap) came out too
+# tall to fit, pushing rows across pages.
+PHOTO_MAX_WIDTH = Cm(11)
+PHOTO_MAX_HEIGHT = Cm(7.8)
+
+
+def _fit_within_box(image_bytes, max_width, max_height):
+    """Returns (width, height) EMU that fit image_bytes' aspect ratio inside
+    the given box, preferring to fill it as much as possible."""
+    try:
+        img = DocxImage.from_blob(image_bytes)
+        aspect = img.px_width / img.px_height
+    except Exception:
+        return max_width, max_height  # corrupt/unreadable header -- fall back to the box itself
+
+    width = max_width
+    height = int(width / aspect)
+    if height > max_height:
+        height = max_height
+        width = int(height * aspect)
+    return width, height
 
 
 def _format_session_dates(dates: list[str]) -> tuple[str, str]:
@@ -164,7 +189,8 @@ def build_report_docx(
             cell = row.cells[i % 2]
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=Cm(11))
+            width, height = _fit_within_box(photo["bytes"], PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT)
+            p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=width, height=height)
             cap = cell.add_paragraph()
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             date_str = photo.get("date", "")
