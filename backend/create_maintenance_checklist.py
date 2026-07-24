@@ -32,6 +32,17 @@ def add_checklist_section(doc, project: dict, maintenance_date: str):
     run.font.size = Pt(13)
     run.underline = True
 
+    # Company contact details -- this page is printed and hand-signed on site,
+    # so it's the one place in the document that needs to carry them (the
+    # per-page header elsewhere only has the company name + reg no).
+    contact = doc.add_paragraph()
+    contact.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    contact_run = contact.add_run(
+        "Tel: +65 6468 6772 | Fax: +65 6877 9989 | 102 Henderson Road, Singapore 159562 | "
+        "hello@gwsliving.com | www.gwslivingart.com"
+    )
+    contact_run.font.size = Pt(8)
+
     doc.add_paragraph()
     p = doc.add_paragraph()
     p.add_run("Project Name: ").bold = True
@@ -48,7 +59,14 @@ def add_checklist_section(doc, project: dict, maintenance_date: str):
     table = doc.add_table(rows=1 + len(items), cols=4)
     table.style = "Table Grid"
     headers = ["S/N", "Work Description", "Please Tick", "Remarks"]
-    widths = [Cm(1.5), Cm(9), Cm(3), Cm(4)]
+    # Proportions of the old portrait-page widths (1.5:9:3:4 of 17.5cm), scaled
+    # to this document's actual section width -- this page is appended into
+    # the report's landscape section, which is wider than the checklist was
+    # originally designed for, so a fixed Cm() value would render too narrow.
+    section = doc.sections[-1]
+    content_width = section.page_width - section.left_margin - section.right_margin
+    fractions = [1.5 / 17.5, 9 / 17.5, 3 / 17.5, 4 / 17.5]
+    widths = [int(content_width * f) for f in fractions]
     for i, h in enumerate(headers):
         cell = table.rows[0].cells[i]
         cell_text(cell, h, bold=True, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)

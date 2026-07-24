@@ -192,7 +192,15 @@ def build_report_docx(
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             width, height = _fit_within_box(photo["bytes"], PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT)
-            p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=width, height=height)
+            try:
+                p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=width, height=height)
+            except Exception:
+                # Corrupt/unreadable image (e.g. a partial WhatsApp upload) --
+                # _fit_within_box already fell back silently for this same case,
+                # so add_picture must not be allowed to crash the whole report
+                # over one bad photo.
+                run = p.add_run("[Photo could not be loaded]")
+                run.italic = True
             cap = cell.add_paragraph()
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             date_str = photo.get("date", "")

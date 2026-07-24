@@ -4,6 +4,7 @@ import json
 import os
 import base64
 import logging
+import re
 
 import requests
 
@@ -331,7 +332,7 @@ def browse_folder(folder_id: str = "") -> dict:
     service = build("drive", "v3", credentials=creds)
 
     res = service.files().list(
-        q=f"'{root}' in parents and trashed=false",
+        q=f"'{_escape_query(root)}' in parents and trashed=false",
         fields="files(id,name,mimeType)",
         orderBy="name desc",
         supportsAllDrives=True, includeItemsFromAllDrives=True,
@@ -373,20 +374,35 @@ def browse_flat(date_from: str, date_to: str) -> list[dict]:
         fields="files(id,name)",
         supportsAllDrives=True, includeItemsFromAllDrives=True,
     ).execute()
-    date_folders = [f for f in top.get("files", []) if date_from <= f["name"] <= date_to]
+    # Non-date-shaped folders (e.g. "_Unsorted", where the bot puts photos it
+    # can't confidently date) can't be meaningfully compared against the date
+    # range -- exclude them from the range check entirely rather than have a
+    # plain string comparison silently drop them (an underscore sorts after
+    # every digit, so they'd always compare greater than date_to).
+    _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    date_folders = [
+        f for f in top.get("files", [])
+        if not _DATE_RE.match(f["name"]) or date_from <= f["name"] <= date_to
+    ]
 
     def list_children(parent_id, mime_filter=None):
-        svc = _service()
-        q = f"'{parent_id}' in parents and trashed=false"
-        if mime_filter == "folder":
-            q += " and mimeType='application/vnd.google-apps.folder'"
-        elif mime_filter == "image":
-            q += " and mimeType contains 'image/'"
-        res = svc.files().list(
-            q=q, fields="files(id,name)",
-            supportsAllDrives=True, includeItemsFromAllDrives=True,
-        ).execute()
-        return res.get("files", [])
+        # Never raises -- a single folder failing (rate limit, transient error)
+        # must not discard every other folder's already-fetched results.
+        try:
+            svc = _service()
+            q = f"'{parent_id}' in parents and trashed=false"
+            if mime_filter == "folder":
+                q += " and mimeType='application/vnd.google-apps.folder'"
+            elif mime_filter == "image":
+                q += " and mimeType contains 'image/'"
+            res = svc.files().list(
+                q=q, fields="files(id,name)",
+                supportsAllDrives=True, includeItemsFromAllDrives=True,
+            ).execute()
+            return res.get("files", [])
+        except Exception as e:
+            logger.warning(f"browse_flat: could not list children of {parent_id}: {e}")
+            return []
 
     def process_date_folder(date_folder):
         groups = []

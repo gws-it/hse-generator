@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import { downloadReportFile } from '../downloadJob'
@@ -8,6 +8,7 @@ export default function MaintenanceHistoryPage() {
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(null)
   const [downloadProgress, setDownloadProgress] = useState(null) // {key, pct, step}
+  const downloadingRef = useRef(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -16,8 +17,13 @@ export default function MaintenanceHistoryPage() {
 
   async function download(id, fmt, name, e) {
     e?.stopPropagation()
+    // Ref guard, not just the `downloading` state check below -- state updates
+    // are batched/async, so a fast double-click (or clicking two rows' buttons
+    // in quick succession) can otherwise start two overlapping download jobs
+    // before the buttons visually disable.
+    if (downloadingRef.current) return
+    downloadingRef.current = true
     const key = `${id}-${fmt}`
-    if (downloading) return
     setDownloading(key)
     setDownloadProgress({ key, pct: 0, step: 'Starting…' })
     try {
@@ -28,6 +34,7 @@ export default function MaintenanceHistoryPage() {
     } finally {
       setDownloading(null)
       setDownloadProgress(null)
+      downloadingRef.current = false
     }
   }
 

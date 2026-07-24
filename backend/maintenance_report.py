@@ -1,5 +1,8 @@
 import io
+import logging
+import re
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,11 +17,32 @@ import drive_sync
 from create_maintenance_report import build_report_docx
 from pdf_convert import convert_docx_to_pdf
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
 
 # In-memory job store for the async download flow (progress reporting on
 # generation, which can take up to ~1 min for a report with many photos).
+# Entries are evicted once served (get_job_file) and swept by age otherwise
+# (a job whose result is never fetched -- e.g. the browser tab closes mid-poll
+# -- would sit here forever holding its full file_bytes).
 jobs: dict = {}
+JOB_TTL_SECONDS = 3600
+
+
+def _sweep_stale_jobs():
+    cutoff = time.time() - JOB_TTL_SECONDS
+    for jid in [jid for jid, j in jobs.items() if j.get("created_at", 0) < cutoff]:
+        jobs.pop(jid, None)
+
+
+def _safe_filename(name: str) -> str:
+    """ASCII-safe filename component. Project names are free-text and may
+    contain characters (curly quotes, CJK, etc.) that break or crash HTTP
+    header encoding (headers are Latin-1) if used as-is."""
+    ascii_name = name.encode("ascii", "ignore").decode("ascii")
+    ascii_name = re.sub(r'[\\/*?:"<>|]', "", ascii_name).strip()
+    return ascii_name or "report"
 
 
 # ── Projects ────────────────────────────────────────────────────────────────
@@ -223,15 +247,25 @@ def _build_document(report: MaintenanceReport, fmt: str, on_progress=None):
     # Photos were already downloaded once during generate(); download()
     # re-fetches them fresh each time rather than storing large blobs in
     # Postgres. Fetching them concurrently (was sequential) is the main
-    # fix for the ~1 min wait with no feedback.
+    # fix for the ~1 min wait with no feedback. A photo that's since been
+    # deleted/moved in Drive is skipped rather than failing the whole report --
+    # historical reports shouldn't become permanently undownloadable over one
+    # missing file.
     with ThreadPoolExecutor(max_workers=6) as pool:
         futures = {pool.submit(drive_sync.download_file, p["file_id"]): p["file_id"] for p in report.photos}
         done = 0
         for future in as_completed(futures):
-            photos_by_id[futures[future]] = future.result()
+            file_id = futures[future]
+            try:
+                photos_by_id[file_id] = future.result()
+            except Exception as e:
+                logger.warning(f"Maintenance report {report.id}: could not fetch photo {file_id}: {e}")
             done += 1
             progress(int(done / total * 70), f"Fetching photo {done} of {total}…")
-    photos = [{"bytes": photos_by_id[p["file_id"]], "date": p.get("date", "")} for p in report.photos]
+    photos = [
+        {"bytes": photos_by_id[p["file_id"]], "date": p.get("date", "")}
+        for p in report.photos if p["file_id"] in photos_by_id
+    ]
     progress(80, "Building report document…")
     docx_bytes = build_report_docx(project_dict, maintenance_date, photos, logo)
 
@@ -244,7 +278,7 @@ def _build_document(report: MaintenanceReport, fmt: str, on_progress=None):
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     progress(100, "Done")
-    fname = f"report_{project.name}.{fmt}".replace(" ", "_")
+    fname = f"report_{_safe_filename(project.name)}.{fmt}".replace(" ", "_")
     return file_bytes, media_type, fname
 
 
@@ -285,8 +319,9 @@ def download_start(
     report = _get_report(report_id, db)  # validate it exists before backgrounding
     captured_report_id = report.id
 
+    _sweep_stale_jobs()
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "processing", "progress": 0, "step": "Starting…", "error": None}
+    jobs[job_id] = {"status": "processing", "progress": 0, "step": "Starting…", "error": None, "created_at": time.time()}
 
     def run():
         try:
@@ -303,11 +338,15 @@ def download_start(
                 jobs[job_id] = {
                     "status": "done", "progress": 100, "step": "Done", "error": None,
                     "file_bytes": file_bytes, "media_type": media_type, "filename": fname,
+                    "created_at": jobs[job_id].get("created_at", time.time()),
                 }
             finally:
                 db2.close()
         except Exception as e:
-            jobs[job_id] = {"status": "error", "progress": 0, "step": "", "error": str(e)}
+            jobs[job_id] = {
+                "status": "error", "progress": 0, "step": "", "error": str(e),
+                "created_at": jobs.get(job_id, {}).get("created_at", time.time()),
+            }
 
     threading.Thread(target=run, daemon=True).start()
     return {"job_id": job_id}
@@ -326,8 +365,10 @@ def get_job_file(job_id: str, current_user: User = Depends(get_current_user)):
     job = jobs.get(job_id)
     if not job or job.get("status") != "done":
         raise HTTPException(404, "File not ready")
+    file_bytes, media_type, filename = job["file_bytes"], job["media_type"], job["filename"]
+    jobs.pop(job_id, None)  # served -- drop the (potentially multi-MB) payload from memory
     return StreamingResponse(
-        io.BytesIO(job["file_bytes"]),
-        media_type=job["media_type"],
-        headers={"Content-Disposition": f'attachment; filename="{job["filename"]}"'},
+        io.BytesIO(file_bytes),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
