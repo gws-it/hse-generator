@@ -10,7 +10,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 TEMPLATE_FOLDER_ID = os.getenv("DRIVE_TEMPLATE_FOLDER_ID", "1ZUldUo93atjfQpflj96GormprgOONCX_")
-LOGO_FILE_ID = os.getenv("DRIVE_LOGO_FILE_ID", "1-5akbsnWrz_8E8uziD1_GuNb0tN1DQTY")
 
 TYPE_MAP = {
     "green wall": "Green Wall",
@@ -118,20 +117,25 @@ def _list_folder(folder_id: str, creds=None, api_key: str = "") -> list[dict]:
     return []
 
 
+_LOGO_ASSET_PATH = os.path.join(os.path.dirname(__file__), "assets", "gws_logo.png")
+
+
 def get_logo_bytes() -> bytes | None:
-    """Return the GWS logo as PNG bytes (cached in memory)."""
+    """
+    Return the GWS logo as PNG bytes (cached in memory). Bundled as a local
+    asset (backend/assets/gws_logo.png) rather than fetched from Drive -- more
+    reliable (no network call, no credentials dependency) for something used
+    on every page of every generated document.
+    """
     global _logo_cache
     if _logo_cache is not None:
         return _logo_cache
     try:
-        creds = _get_creds()
-        api_key = _get_api_key()
-        data = _download(LOGO_FILE_ID, creds, api_key)
-        _logo_cache = data
-        logger.info("Drive: logo downloaded and cached.")
-        return data
+        with open(_LOGO_ASSET_PATH, "rb") as f:
+            _logo_cache = f.read()
+        return _logo_cache
     except Exception as e:
-        logger.warning(f"Drive: logo download failed: {e}")
+        logger.warning(f"Logo asset load failed: {e}")
         return None
 
 

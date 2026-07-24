@@ -14,15 +14,15 @@ export default function MaintenanceHistoryPage() {
     api.get('/maintenance/history').then((r) => { setHistory(r.data); setLoading(false) }).catch(() => setLoading(false))
   }, [])
 
-  async function download(id, doc, fmt, name, e) {
+  async function download(id, fmt, name, e) {
     e?.stopPropagation()
-    const key = `${id}-${doc}-${fmt}`
+    const key = `${id}-${fmt}`
     if (downloading) return
     setDownloading(key)
     setDownloadProgress({ key, pct: 0, step: 'Starting…' })
     try {
-      const filename = `${doc}_${name || 'report'}.${fmt}`.replace(/\s+/g, '_')
-      await downloadReportFile(id, doc, fmt, filename, (pct, step) => setDownloadProgress({ key, pct, step }))
+      const filename = `report_${name || 'report'}.${fmt}`.replace(/\s+/g, '_')
+      await downloadReportFile(id, fmt, filename, (pct, step) => setDownloadProgress({ key, pct, step }))
     } catch {
       alert('Download failed. Please try again.')
     } finally {
@@ -64,10 +64,8 @@ export default function MaintenanceHistoryPage() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'checklist', 'docx', r.project_name, e)} className="btn-secondary text-xs py-1">⬇ Checklist (Word)</button>
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'checklist', 'pdf', r.project_name, e)} className="btn-secondary text-xs py-1">⬇ Checklist (PDF)</button>
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'report', 'docx', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (Word)</button>
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'report', 'pdf', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (PDF)</button>
+                <button disabled={!!downloading} onClick={(e) => download(r.id, 'docx', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (Word)</button>
+                <button disabled={!!downloading} onClick={(e) => download(r.id, 'pdf', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (PDF)</button>
               </div>
             </div>
 

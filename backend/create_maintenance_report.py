@@ -1,4 +1,4 @@
-"""Build the Maintenance Photo Report DOCX (letterhead cover + photo grid pages)."""
+"""Build the Maintenance Photo Report DOCX (letterhead cover + checklist + photo grid pages)."""
 import io
 from datetime import datetime
 from docx import Document
@@ -6,6 +6,8 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+
+from create_maintenance_checklist import add_checklist_section
 
 PHOTOS_PER_PAGE = 4  # laid out as a 2x2 grid, matching the sample report's density
 
@@ -77,6 +79,7 @@ def _add_gws_header(doc, logo_bytes):
 
 def build_report_docx(
     project: dict,
+    maintenance_date: str,
     photos: list[dict],
     logo_bytes: bytes = None,
 ) -> bytes:
@@ -129,6 +132,12 @@ def build_report_docx(
 
     doc.add_page_break()
 
+    # ── Checklist page (included in the report, not a separate document) ────
+    _add_gws_header(doc, logo_bytes)
+    add_checklist_section(doc, project, maintenance_date)
+
+    doc.add_page_break()
+
     # ── Session header page ─────────────────────────────────────────────────
     _add_gws_header(doc, logo_bytes)
     for _ in range(3):
@@ -170,11 +179,14 @@ def build_report_docx(
 
     # ── End page ─────────────────────────────────────────────────────────────
     doc.add_page_break()
+    _add_gws_header(doc, logo_bytes)
+    for _ in range(4):
+        doc.add_paragraph()
     end = doc.add_paragraph()
     end.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    er = end.add_run("END OF REPORT")
+    er = end.add_run("Thank You")
     er.bold = True
-    er.font.size = Pt(16)
+    er.font.size = Pt(24)
 
     buf = io.BytesIO()
     doc.save(buf)

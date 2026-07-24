@@ -5,8 +5,8 @@ const POLL_INTERVAL_MS = 1000
 // Starts the async /download-start + /jobs flow (real progress, instead of a
 // blind wait) and triggers the browser download once the file is ready.
 // onProgress(percent, step) is called as the backend reports progress.
-export async function downloadReportFile(reportId, doc, fmt, filename, onProgress) {
-  const start = await api.post(`/maintenance/download-start/${reportId}/${doc}/${fmt}`)
+export async function downloadReportFile(reportId, fmt, filename, onProgress) {
+  const start = await api.post(`/maintenance/download-start/${reportId}/${fmt}`)
   const jobId = start.data.job_id
 
   return new Promise((resolve, reject) => {

@@ -431,15 +431,14 @@ export default function MaintenanceGeneratePage() {
     }
   }
 
-  async function handleDownload(doc, fmt) {
-    const key = `${doc}-${fmt}`
+  async function handleDownload(fmt) {
     if (downloadingRef.current) return
     downloadingRef.current = true
-    setDownloading(key)
+    setDownloading(fmt)
     setDownloadProgress({ pct: 0, step: 'Starting…' })
     try {
-      const filename = `${doc}_${selectedProject?.name || 'report'}.${fmt}`.replace(/\s+/g, '_')
-      await downloadReportFile(reportId, doc, fmt, filename, (pct, step) => setDownloadProgress({ pct, step }))
+      const filename = `report_${selectedProject?.name || 'report'}.${fmt}`.replace(/\s+/g, '_')
+      await downloadReportFile(reportId, fmt, filename, (pct, step) => setDownloadProgress({ pct, step }))
     } catch {
       alert('Download failed. Please try again.')
     } finally {
@@ -454,7 +453,7 @@ export default function MaintenanceGeneratePage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Maintenance Report Generator</h1>
         <p className="text-gray-500 text-sm">
-          Pick a project, find its photos already uploaded from WhatsApp, and generate the checklist + photo report.
+          Pick a project, find its photos already uploaded from WhatsApp, and generate the report (checklist + photos in one document).
         </p>
       </div>
 
@@ -803,10 +802,8 @@ export default function MaintenanceGeneratePage() {
         <div className="card">
           <h2 className="text-lg font-bold text-gray-900 mb-3">4. Download</h2>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary text-sm" disabled={downloading === 'checklist-docx'} onClick={() => handleDownload('checklist', 'docx')}>⬇ Checklist (Word)</button>
-            <button className="btn-secondary text-sm" disabled={downloading === 'checklist-pdf'} onClick={() => handleDownload('checklist', 'pdf')}>⬇ Checklist (PDF)</button>
-            <button className="btn-green text-sm" disabled={downloading === 'report-docx'} onClick={() => handleDownload('report', 'docx')}>⬇ Photo Report (Word)</button>
-            <button className="btn-green text-sm" disabled={downloading === 'report-pdf'} onClick={() => handleDownload('report', 'pdf')}>⬇ Photo Report (PDF)</button>
+            <button className="btn-green text-sm" disabled={downloading === 'docx'} onClick={() => handleDownload('docx')}>⬇ Report (Word)</button>
+            <button className="btn-green text-sm" disabled={downloading === 'pdf'} onClick={() => handleDownload('pdf')}>⬇ Report (PDF)</button>
           </div>
 
           {downloadProgress && (

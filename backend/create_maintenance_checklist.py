@@ -1,6 +1,9 @@
-"""Build the Green Roof Maintenance Work Checklist DOCX (prefilled, for printing & hand-signing)."""
-import io
-from docx import Document
+"""
+Checklist section -- appended as a page within the merged Maintenance Report
+(see create_maintenance_report.py). No longer a standalone document: the
+letterhead/logo for this section is handled by the report's own per-page
+header, so this module only adds content to an existing Document.
+"""
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
@@ -21,42 +24,8 @@ CHECKLIST_ITEMS = {
 DEFAULT_ITEM_SET = "Green Roof"
 
 
-def _add_letterhead(doc, logo_bytes):
-    table = doc.add_table(rows=1, cols=2)
-    table.autofit = True
-    logo_cell, text_cell = table.rows[0].cells
-
-    if logo_bytes:
-        p = logo_cell.paragraphs[0]
-        p.add_run().add_picture(io.BytesIO(logo_bytes), height=Cm(2.2))
-
-    lines = [
-        ("GWS Living Art PTE LTD", True, 14),
-        ("Reg no: 201709254M", False, 8),
-        ("Tel: +65 6468 6772 | Fax: +65 6877 9989", False, 8),
-        ("102 Henderson Road, Singapore 159562", False, 8),
-        ("Email: hello@gwsliving.com | www.gwslivingart.com", False, 8),
-    ]
-    p = text_cell.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for i, (text, bold, size) in enumerate(lines):
-        target = p if i == 0 else text_cell.add_paragraph()
-        target.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = target.add_run(text)
-        run.bold = bold
-        run.font.size = Pt(size)
-
-    doc.add_paragraph()
-
-
-def build_checklist_docx(project: dict, maintenance_date: str, logo_bytes: bytes = None) -> bytes:
-    doc = Document()
-    for section in doc.sections:
-        section.left_margin = Cm(2)
-        section.right_margin = Cm(2)
-
-    _add_letterhead(doc, logo_bytes)
-
+def add_checklist_section(doc, project: dict, maintenance_date: str):
+    """Appends the checklist title, table, and signature blocks to an existing Document."""
     title = doc.add_paragraph()
     run = title.add_run("Green Roof Maintenance Work Checklist")
     run.bold = True
@@ -113,8 +82,3 @@ def build_checklist_docx(project: dict, maintenance_date: str, logo_bytes: bytes
     ]:
         p = right_cell.add_paragraph()
         p.add_run(text)
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.read()

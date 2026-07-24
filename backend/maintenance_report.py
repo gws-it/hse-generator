@@ -11,7 +11,6 @@ from database import get_db
 from models import User, Project, MaintenanceReport
 from auth import get_current_user
 import drive_sync
-from create_maintenance_checklist import build_checklist_docx
 from create_maintenance_report import build_report_docx
 from pdf_convert import convert_docx_to_pdf
 
@@ -202,12 +201,13 @@ def _project_dict(project: Project, report: MaintenanceReport) -> dict:
     }
 
 
-def _build_document(report: MaintenanceReport, doc: str, fmt: str, on_progress=None):
+def _build_document(report: MaintenanceReport, fmt: str, on_progress=None):
     """
-    Builds the requested document, returning (file_bytes, media_type, filename).
-    on_progress(percent, step_label), if given, is called as work proceeds --
-    the photo-fetch step (the slow part, ~1 min for a report with many photos)
-    is the only one where progress is meaningfully incremental.
+    Builds the merged checklist + photo report document, returning
+    (file_bytes, media_type, filename). on_progress(percent, step_label), if
+    given, is called as work proceeds -- the photo-fetch step (the slow part,
+    ~1 min for a report with many photos) is the only one where progress is
+    meaningfully incremental.
     """
     def progress(pct, step):
         if on_progress:
@@ -216,28 +216,24 @@ def _build_document(report: MaintenanceReport, doc: str, fmt: str, on_progress=N
     project = report.project
     logo = drive_sync.get_logo_bytes()
     project_dict = _project_dict(project, report)
+    maintenance_date = report.date_to or report.date_from or ""
 
-    if doc == "checklist":
-        progress(50, "Building checklist…")
-        maintenance_date = report.date_to or report.date_from or ""
-        docx_bytes = build_checklist_docx(project_dict, maintenance_date, logo)
-    else:
-        total = len(report.photos) or 1
-        photos_by_id = {}
-        # Photos were already downloaded once during generate(); download()
-        # re-fetches them fresh each time rather than storing large blobs in
-        # Postgres. Fetching them concurrently (was sequential) is the main
-        # fix for the ~1 min wait with no feedback.
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = {pool.submit(drive_sync.download_file, p["file_id"]): p["file_id"] for p in report.photos}
-            done = 0
-            for future in as_completed(futures):
-                photos_by_id[futures[future]] = future.result()
-                done += 1
-                progress(int(done / total * 70), f"Fetching photo {done} of {total}…")
-        photos = [{"bytes": photos_by_id[p["file_id"]], "date": p.get("date", "")} for p in report.photos]
-        progress(80, "Building report document…")
-        docx_bytes = build_report_docx(project_dict, photos, logo)
+    total = len(report.photos) or 1
+    photos_by_id = {}
+    # Photos were already downloaded once during generate(); download()
+    # re-fetches them fresh each time rather than storing large blobs in
+    # Postgres. Fetching them concurrently (was sequential) is the main
+    # fix for the ~1 min wait with no feedback.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(drive_sync.download_file, p["file_id"]): p["file_id"] for p in report.photos}
+        done = 0
+        for future in as_completed(futures):
+            photos_by_id[futures[future]] = future.result()
+            done += 1
+            progress(int(done / total * 70), f"Fetching photo {done} of {total}…")
+    photos = [{"bytes": photos_by_id[p["file_id"]], "date": p.get("date", "")} for p in report.photos]
+    progress(80, "Building report document…")
+    docx_bytes = build_report_docx(project_dict, maintenance_date, photos, logo)
 
     if fmt == "pdf":
         progress(90, "Converting to PDF…")
@@ -248,24 +244,24 @@ def _build_document(report: MaintenanceReport, doc: str, fmt: str, on_progress=N
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     progress(100, "Done")
-    fname = f"{doc}_{project.name}.{fmt}".replace(" ", "_")
+    fname = f"report_{project.name}.{fmt}".replace(" ", "_")
     return file_bytes, media_type, fname
 
 
-@router.get("/download/{report_id}/{doc}/{fmt}")
+@router.get("/download/{report_id}/{fmt}")
 def download(
-    report_id: int, doc: str, fmt: str,
+    report_id: int, fmt: str,
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Direct synchronous download -- kept for stable direct links. The
     frontend uses the async /download-start + /jobs flow below instead, for
     progress reporting."""
-    if doc not in ("checklist", "report") or fmt not in ("docx", "pdf"):
-        raise HTTPException(400, "Invalid doc or format")
+    if fmt not in ("docx", "pdf"):
+        raise HTTPException(400, "Invalid format")
 
     report = _get_report(report_id, db)
     try:
-        file_bytes, media_type, fname = _build_document(report, doc, fmt)
+        file_bytes, media_type, fname = _build_document(report, fmt)
     except Exception as e:
         raise HTTPException(502, f"Could not build document: {e}")
 
@@ -276,15 +272,15 @@ def download(
     )
 
 
-@router.post("/download-start/{report_id}/{doc}/{fmt}")
+@router.post("/download-start/{report_id}/{fmt}")
 def download_start(
-    report_id: int, doc: str, fmt: str,
+    report_id: int, fmt: str,
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     """Start document generation in the background, returning a job_id to poll
     for progress -- avoids the ~1 min blind wait of the direct download."""
-    if doc not in ("checklist", "report") or fmt not in ("docx", "pdf"):
-        raise HTTPException(400, "Invalid doc or format")
+    if fmt not in ("docx", "pdf"):
+        raise HTTPException(400, "Invalid format")
 
     report = _get_report(report_id, db)  # validate it exists before backgrounding
     captured_report_id = report.id
@@ -299,7 +295,7 @@ def download_start(
             try:
                 report2 = db2.query(MaintenanceReport).filter(MaintenanceReport.id == captured_report_id).first()
                 file_bytes, media_type, fname = _build_document(
-                    report2, doc, fmt,
+                    report2, fmt,
                     on_progress=lambda pct, step: jobs.__setitem__(
                         job_id, {**jobs[job_id], "progress": pct, "step": step}
                     ),
