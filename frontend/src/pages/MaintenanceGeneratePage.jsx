@@ -190,6 +190,10 @@ export default function MaintenanceGeneratePage() {
       setPhotos(found)
       setSelectedIds(new Set(found.map((p) => p.file_id)))
 
+      if (found.length === 0) {
+        setSearchError("Don't have photos for this project in the selected date range.")
+      }
+
       // Fetch thumbnails in small batches (not all at once) -- with dozens/hundreds
       // of photos, firing every request simultaneously overwhelms the connection
       // and makes the grid appear to hang instead of loading progressively.
