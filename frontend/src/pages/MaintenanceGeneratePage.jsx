@@ -191,7 +191,7 @@ export default function MaintenanceGeneratePage() {
       setSelectedIds(new Set(found.map((p) => p.file_id)))
 
       if (found.length === 0) {
-        setSearchError("Don't have photos for this project in the selected date range.")
+        setSearchError('No matching photos found — a WhatsApp caption typo may have misfiled them. Try "Browse Drive manually" or "List all photos" below.')
       }
 
       // Fetch thumbnails in small batches (not all at once) -- with dozens/hundreds
