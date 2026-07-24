@@ -186,13 +186,13 @@ def build_report_docx(
     end.alignment = WD_ALIGN_PARAGRAPH.CENTER
     er = end.add_run("END OF REPORT")
     er.bold = True
-    er.font.size = Pt(16)
+    er.font.size = Pt(20)
 
     thanks = doc.add_paragraph()
     thanks.alignment = WD_ALIGN_PARAGRAPH.CENTER
     tr = thanks.add_run("Thank You")
     tr.bold = True
-    tr.font.size = Pt(24)
+    tr.font.size = Pt(20)
 
     buf = io.BytesIO()
     doc.save(buf)
