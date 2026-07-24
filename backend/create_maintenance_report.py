@@ -10,14 +10,16 @@ from docx.image.image import Image as DocxImage
 
 from create_maintenance_checklist import add_checklist_section
 
-PHOTOS_PER_PAGE = 4  # laid out as a 2x2 grid, matching the sample report's density
+PHOTOS_PER_PAGE = 2  # 1 row of 2, side by side -- more room per photo than a 2x2 grid
 
-# Bounding box each photo must fit within, so a 2x2 grid + captions always
-# fits on one landscape page regardless of source photo orientation -- a
-# portrait phone photo scaled by width alone (no height cap) came out too
-# tall to fit, pushing rows across pages.
-PHOTO_MAX_WIDTH = Cm(11)
-PHOTO_MAX_HEIGHT = Cm(7.8)
+# Bounding box each photo must fit within, so a row + captions always fits on
+# one landscape page regardless of source photo orientation -- a portrait
+# phone photo scaled by width alone (no height cap) came out too tall to fit,
+# pushing rows across pages. A 2x2 grid gave each photo too little height
+# budget (~7.8cm) to stay a reasonable size once height-capped, so this uses
+# a single row instead -- about double the height budget.
+PHOTO_MAX_WIDTH = Cm(11.5)
+PHOTO_MAX_HEIGHT = Cm(16)
 
 
 def _fit_within_box(image_bytes, max_width, max_height):
