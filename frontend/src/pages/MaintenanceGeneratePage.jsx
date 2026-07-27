@@ -52,8 +52,22 @@ export default function MaintenanceGeneratePage() {
   const [browseThumbUrls, setBrowseThumbUrls] = useState({})
   const [browseSelectedIds, setBrowseSelectedIds] = useState(new Set())
 
+  // Flat "list all photos in this date range, grouped by folder" -- an
+  // alternative to clicking through folders one at a time. Groups load fast
+  // (just names + counts); thumbnails only load for a group once expanded,
+  // since a wide date range can have 100+ folders / 1000+ photos.
+  const [flatOpen, setFlatOpen] = useState(false)
+  const [flatGroups, setFlatGroups] = useState([]) // [{date, folder_name, photos}]
+  const [flatLoading, setFlatLoading] = useState(false)
+  const [flatError, setFlatError] = useState('')
+  const [expandedDates, setExpandedDates] = useState(new Set()) // date strings
+  const [expandedGroups, setExpandedGroups] = useState(new Set()) // "date|folder_name"
+  const [flatThumbUrls, setFlatThumbUrls] = useState({})
+  const [flatSelectedIds, setFlatSelectedIds] = useState(new Set())
+
   const thumbUrlsRef = useRef({})
   const browseThumbUrlsRef = useRef({})
+  const flatThumbUrlsRef = useRef({})
   const generatingRef = useRef(false)
   const downloadingRef = useRef(false)
 
@@ -73,11 +87,35 @@ export default function MaintenanceGeneratePage() {
   }, [browseThumbUrls])
 
   useEffect(() => {
+    flatThumbUrlsRef.current = flatThumbUrls
+  }, [flatThumbUrls])
+
+  useEffect(() => {
     return () => {
       Object.values(thumbUrlsRef.current).forEach((url) => URL.revokeObjectURL(url))
       Object.values(browseThumbUrlsRef.current).forEach((url) => URL.revokeObjectURL(url))
+      Object.values(flatThumbUrlsRef.current).forEach((url) => URL.revokeObjectURL(url))
     }
   }, [])
+
+  // Shared by both the folder browser and the flat list -- fetches thumbnails
+  // a few at a time instead of all at once (see handleFindPhotos for why).
+  async function fetchThumbnailsBatched(items, onBatch) {
+    const BATCH_SIZE = 8
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+      const batch = items.slice(i, i + BATCH_SIZE)
+      const urls = {}
+      await Promise.all(batch.map(async (item) => {
+        try {
+          const res = await api.get(`/maintenance/photo/${item.file_id}`, { responseType: 'blob' })
+          urls[item.file_id] = URL.createObjectURL(res.data)
+        } catch {
+          // leave missing -- shows a placeholder
+        }
+      }))
+      onBatch(urls)
+    }
+  }
 
   const filteredProjects = search.trim()
     ? projects.filter((p) =>
@@ -85,6 +123,19 @@ export default function MaintenanceGeneratePage() {
         p.code.toLowerCase().includes(search.toLowerCase())
       )
     : projects
+
+  // flatGroups (flat [{date, folder_name, photos}]) nested into
+  // [{date, folders: [{folder_name, photos}]}] for the date > folder collapse tree.
+  const groupedByDate = (() => {
+    const byDate = new Map()
+    for (const g of flatGroups) {
+      if (!byDate.has(g.date)) byDate.set(g.date, [])
+      byDate.get(g.date).push(g)
+    }
+    return [...byDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, folders]) => ({ date, folders }))
+  })()
 
   function pickProject(project) {
     setSelectedProject(project)
@@ -139,6 +190,10 @@ export default function MaintenanceGeneratePage() {
       setPhotos(found)
       setSelectedIds(new Set(found.map((p) => p.file_id)))
 
+      if (found.length === 0) {
+        setSearchError('No matching photos found — a WhatsApp caption typo may have misfiled them. Try "Browse Drive manually" or "List all photos" below.')
+      }
+
       // Fetch thumbnails in small batches (not all at once) -- with dozens/hundreds
       // of photos, firing every request simultaneously overwhelms the connection
       // and makes the grid appear to hang instead of loading progressively.
@@ -190,22 +245,7 @@ export default function MaintenanceGeneratePage() {
       const res = await api.get('/maintenance/drive/browse', { params: { folder_id: folderId } })
       setBrowseFolders(res.data.folders || [])
       setBrowseImages(res.data.images || [])
-
-      const THUMB_BATCH_SIZE = 8
-      const images = res.data.images || []
-      for (let i = 0; i < images.length; i += THUMB_BATCH_SIZE) {
-        const batch = images.slice(i, i + THUMB_BATCH_SIZE)
-        const batchUrls = {}
-        await Promise.all(batch.map(async (img) => {
-          try {
-            const imgRes = await api.get(`/maintenance/photo/${img.file_id}`, { responseType: 'blob' })
-            batchUrls[img.file_id] = URL.createObjectURL(imgRes.data)
-          } catch {
-            // leave missing
-          }
-        }))
-        setBrowseThumbUrls((prev) => ({ ...prev, ...batchUrls }))
-      }
+      await fetchThumbnailsBatched(res.data.images || [], (urls) => setBrowseThumbUrls((prev) => ({ ...prev, ...urls })))
     } catch (err) {
       setBrowseError(err.response?.data?.detail || 'Could not browse Drive.')
     } finally {
@@ -214,6 +254,7 @@ export default function MaintenanceGeneratePage() {
   }
 
   function openBrowser() {
+    setFlatOpen(false)
     setBrowseOpen(true)
     setBrowseStack([])
     loadBrowseFolder([])
@@ -261,6 +302,104 @@ export default function MaintenanceGeneratePage() {
     setBrowseSelectedIds(new Set())
   }
 
+  // ── Flat "list all photos, grouped by folder" (alternative to browsing) ───
+
+  function groupKey(g) {
+    return `${g.date}|${g.folder_name}`
+  }
+
+  function toggleDateExpand(date) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev)
+      if (next.has(date)) next.delete(date)
+      else next.add(date)
+      return next
+    })
+  }
+
+  async function openFlatList() {
+    setBrowseOpen(false)
+    setFlatOpen(true)
+    setFlatLoading(true)
+    setFlatError('')
+    setFlatGroups([])
+    setExpandedDates(new Set())
+    setExpandedGroups(new Set())
+    setFlatSelectedIds(new Set())
+    try {
+      const res = await api.get('/maintenance/drive/browse-flat', { params: { date_from: dateFrom, date_to: dateTo } })
+      setFlatGroups(res.data || [])
+    } catch (err) {
+      setFlatError(err.response?.data?.detail || 'Could not list Drive photos.')
+    } finally {
+      setFlatLoading(false)
+    }
+  }
+
+  async function toggleGroupExpand(group) {
+    const key = groupKey(group)
+    const isOpen = expandedGroups.has(key)
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (isOpen) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    if (!isOpen) {
+      // Load thumbnails lazily, only for the group being expanded.
+      const missing = group.photos.filter((p) => !flatThumbUrls[p.file_id])
+      if (missing.length) {
+        await fetchThumbnailsBatched(missing, (urls) => setFlatThumbUrls((prev) => ({ ...prev, ...urls })))
+      }
+    }
+  }
+
+  function toggleFlatSelect(fileId) {
+    setFlatSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(fileId)) next.delete(fileId)
+      else next.add(fileId)
+      return next
+    })
+  }
+
+  function selectAllInGroup(group) {
+    setFlatSelectedIds((prev) => new Set([...prev, ...group.photos.map((p) => p.file_id)]))
+  }
+
+  function clearGroupSelection(group) {
+    setFlatSelectedIds((prev) => {
+      const next = new Set(prev)
+      group.photos.forEach((p) => next.delete(p.file_id))
+      return next
+    })
+  }
+
+  function addSelectedFromFlat() {
+    const toAdd = []
+    for (const group of flatGroups) {
+      for (const photo of group.photos) {
+        if (flatSelectedIds.has(photo.file_id)) {
+          toAdd.push({ file_id: photo.file_id, name: photo.name, date: group.date })
+        }
+      }
+    }
+
+    setPhotos((prev) => {
+      const existingIds = new Set(prev.map((p) => p.file_id))
+      return [...prev, ...toAdd.filter((p) => !existingIds.has(p.file_id))]
+    })
+    setSelectedIds((prev) => new Set([...prev, ...toAdd.map((p) => p.file_id)]))
+    setThumbUrls((prev) => {
+      const next = { ...prev }
+      for (const p of toAdd) {
+        if (flatThumbUrls[p.file_id]) next[p.file_id] = flatThumbUrls[p.file_id]
+      }
+      return next
+    })
+    setFlatSelectedIds(new Set())
+  }
+
   async function handleGenerate() {
     // Guard with a ref, not just the `generating` state -- state updates are
     // batched/async, so a fast double-click can otherwise start this twice
@@ -296,15 +435,14 @@ export default function MaintenanceGeneratePage() {
     }
   }
 
-  async function handleDownload(doc, fmt) {
-    const key = `${doc}-${fmt}`
+  async function handleDownload(fmt) {
     if (downloadingRef.current) return
     downloadingRef.current = true
-    setDownloading(key)
+    setDownloading(fmt)
     setDownloadProgress({ pct: 0, step: 'Starting…' })
     try {
-      const filename = `${doc}_${selectedProject?.name || 'report'}.${fmt}`.replace(/\s+/g, '_')
-      await downloadReportFile(reportId, doc, fmt, filename, (pct, step) => setDownloadProgress({ pct, step }))
+      const filename = `report_${selectedProject?.name || 'report'}.${fmt}`.replace(/\s+/g, '_')
+      await downloadReportFile(reportId, fmt, filename, (pct, step) => setDownloadProgress({ pct, step }))
     } catch {
       alert('Download failed. Please try again.')
     } finally {
@@ -319,7 +457,7 @@ export default function MaintenanceGeneratePage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Maintenance Report Generator</h1>
         <p className="text-gray-500 text-sm">
-          Pick a project, find its photos already uploaded from WhatsApp, and generate the checklist + photo report.
+          Pick a project, find its photos already uploaded from WhatsApp, and generate the report (checklist + photos in one document).
         </p>
       </div>
 
@@ -418,11 +556,16 @@ export default function MaintenanceGeneratePage() {
           {searchError && <p className="text-sm text-red-600 mt-2">{searchError}</p>}
 
           <div className="mt-4 pt-4 border-t border-gray-100">
-            {!browseOpen ? (
-              <button className="text-sm text-blue-700 font-medium" onClick={openBrowser}>
-                Can't find your photos? Browse Drive manually →
-              </button>
-            ) : (
+            {!browseOpen && !flatOpen ? (
+              <div className="flex flex-wrap gap-4">
+                <button className="text-sm text-blue-700 font-medium" onClick={openBrowser}>
+                  Can't find your photos? Browse Drive folders →
+                </button>
+                <button className="text-sm text-blue-700 font-medium" onClick={openFlatList}>
+                  Or list all photos in this date range →
+                </button>
+              </div>
+            ) : browseOpen ? (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-sm text-gray-600">
@@ -462,6 +605,14 @@ export default function MaintenanceGeneratePage() {
 
                     {browseImages.length > 0 && (
                       <>
+                        <div className="flex gap-3 mb-2">
+                          <button className="text-xs text-blue-700 font-medium" onClick={() => setBrowseSelectedIds(new Set(browseImages.map((i) => i.file_id)))}>
+                            Select all {browseImages.length}
+                          </button>
+                          <button className="text-xs text-gray-500 font-medium" onClick={() => setBrowseSelectedIds(new Set())}>
+                            Clear
+                          </button>
+                        </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-3">
                           {browseImages.map((img) => (
                             <label key={img.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${browseSelectedIds.has(img.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
@@ -492,6 +643,112 @@ export default function MaintenanceGeneratePage() {
                     {browseFolders.length === 0 && browseImages.length === 0 && (
                       <p className="text-sm text-gray-400">This folder is empty.</p>
                     )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm text-gray-600">
+                    Every photo folder found between {dateFrom} and {dateTo} — click a group to see its photos.
+                  </p>
+                  <button className="text-xs text-gray-500 font-medium whitespace-nowrap ml-3" onClick={() => setFlatOpen(false)}>Close</button>
+                </div>
+
+                {flatLoading && <p className="text-sm text-gray-400">Scanning Drive — this can take up to 30s for wide date ranges…</p>}
+                {flatError && <p className="text-sm text-red-600">{flatError}</p>}
+
+                {!flatLoading && !flatError && flatGroups.length === 0 && (
+                  <p className="text-sm text-gray-400">No photos found in this date range.</p>
+                )}
+
+                {!flatLoading && !flatError && flatGroups.length > 0 && (
+                  <>
+                    <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg divide-y mb-3">
+                      {groupedByDate.map((dateGroup) => {
+                        const dateExpanded = expandedDates.has(dateGroup.date)
+                        const totalPhotosForDate = dateGroup.folders.reduce((n, f) => n + f.photos.length, 0)
+                        const selectedForDate = dateGroup.folders.reduce(
+                          (n, f) => n + f.photos.filter((p) => flatSelectedIds.has(p.file_id)).length, 0
+                        )
+                        return (
+                          <div key={dateGroup.date}>
+                            <button
+                              onClick={() => toggleDateExpand(dateGroup.date)}
+                              className="w-full flex items-center justify-between px-3 py-2.5 text-sm bg-white hover:bg-gray-50 text-left font-semibold"
+                            >
+                              <span>
+                                <span className="text-gray-400 mr-2">{dateExpanded ? '▾' : '▸'}</span>
+                                <span className="text-gray-900">{dateGroup.date}</span>
+                              </span>
+                              <span className="text-xs text-gray-400 font-normal whitespace-nowrap ml-2">
+                                {selectedForDate > 0 && <span className="text-blue-600 font-medium">{selectedForDate} selected · </span>}
+                                {dateGroup.folders.length} folder{dateGroup.folders.length !== 1 ? 's' : ''} · {totalPhotosForDate} photo{totalPhotosForDate !== 1 ? 's' : ''}
+                              </span>
+                            </button>
+
+                            {dateExpanded && dateGroup.folders.map((group) => {
+                              const key = groupKey(group)
+                              const isExpanded = expandedGroups.has(key)
+                              const selectedInGroup = group.photos.filter((p) => flatSelectedIds.has(p.file_id)).length
+                              return (
+                                <div key={key} className="border-t border-gray-100">
+                                  <button
+                                    onClick={() => toggleGroupExpand(group)}
+                                    className="w-full flex items-center justify-between pl-8 pr-3 py-2 text-sm hover:bg-gray-50 text-left"
+                                  >
+                                    <span>
+                                      <span className="text-gray-400 mr-2">{isExpanded ? '▾' : '▸'}</span>
+                                      <span className="text-gray-700">{group.folder_name}</span>
+                                    </span>
+                                    <span className="text-xs text-gray-400 whitespace-nowrap ml-2">
+                                      {selectedInGroup > 0 && <span className="text-blue-600 font-medium">{selectedInGroup} selected · </span>}
+                                      {group.photos.length} photo{group.photos.length !== 1 ? 's' : ''}
+                                    </span>
+                                  </button>
+                                  {isExpanded && (
+                                    <div className="p-3 pl-8 bg-gray-50">
+                                      <div className="flex gap-3 mb-2">
+                                        <button className="text-xs text-blue-700 font-medium" onClick={() => selectAllInGroup(group)}>
+                                          Select all {group.photos.length}
+                                        </button>
+                                        <button className="text-xs text-gray-500 font-medium" onClick={() => clearGroupSelection(group)}>
+                                          Clear
+                                        </button>
+                                      </div>
+                                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                        {group.photos.map((photo) => (
+                                          <label key={photo.file_id} className={`relative border-2 rounded-lg overflow-hidden cursor-pointer ${flatSelectedIds.has(photo.file_id) ? 'border-blue-600' : 'border-transparent'}`}>
+                                            <input
+                                              type="checkbox"
+                                              className="absolute top-1.5 left-1.5 w-4 h-4 z-10"
+                                              checked={flatSelectedIds.has(photo.file_id)}
+                                              onChange={() => toggleFlatSelect(photo.file_id)}
+                                            />
+                                            {flatThumbUrls[photo.file_id] ? (
+                                              <img src={flatThumbUrls[photo.file_id]} alt={photo.name} className="w-full h-24 object-cover" />
+                                            ) : (
+                                              <div className="w-full h-24 bg-gray-200 flex items-center justify-center text-xs text-gray-400">Loading…</div>
+                                            )}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <button
+                      className="btn-secondary text-sm"
+                      onClick={addSelectedFromFlat}
+                      disabled={flatSelectedIds.size === 0}
+                    >
+                      Add {flatSelectedIds.size} Selected to Report
+                    </button>
                   </>
                 )}
               </div>
@@ -549,10 +806,8 @@ export default function MaintenanceGeneratePage() {
         <div className="card">
           <h2 className="text-lg font-bold text-gray-900 mb-3">4. Download</h2>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary text-sm" disabled={downloading === 'checklist-docx'} onClick={() => handleDownload('checklist', 'docx')}>⬇ Checklist (Word)</button>
-            <button className="btn-secondary text-sm" disabled={downloading === 'checklist-pdf'} onClick={() => handleDownload('checklist', 'pdf')}>⬇ Checklist (PDF)</button>
-            <button className="btn-green text-sm" disabled={downloading === 'report-docx'} onClick={() => handleDownload('report', 'docx')}>⬇ Photo Report (Word)</button>
-            <button className="btn-green text-sm" disabled={downloading === 'report-pdf'} onClick={() => handleDownload('report', 'pdf')}>⬇ Photo Report (PDF)</button>
+            <button className="btn-green text-sm" disabled={downloading === 'docx'} onClick={() => handleDownload('docx')}>⬇ Report (Word)</button>
+            <button className="btn-green text-sm" disabled={downloading === 'pdf'} onClick={() => handleDownload('pdf')}>⬇ Report (PDF)</button>
           </div>
 
           {downloadProgress && (

@@ -4,13 +4,13 @@ import json
 import os
 import base64
 import logging
+import re
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 TEMPLATE_FOLDER_ID = os.getenv("DRIVE_TEMPLATE_FOLDER_ID", "1ZUldUo93atjfQpflj96GormprgOONCX_")
-LOGO_FILE_ID = os.getenv("DRIVE_LOGO_FILE_ID", "1-5akbsnWrz_8E8uziD1_GuNb0tN1DQTY")
 
 TYPE_MAP = {
     "green wall": "Green Wall",
@@ -118,20 +118,25 @@ def _list_folder(folder_id: str, creds=None, api_key: str = "") -> list[dict]:
     return []
 
 
+_LOGO_ASSET_PATH = os.path.join(os.path.dirname(__file__), "assets", "gws_logo.png")
+
+
 def get_logo_bytes() -> bytes | None:
-    """Return the GWS logo as PNG bytes (cached in memory)."""
+    """
+    Return the GWS logo as PNG bytes (cached in memory). Bundled as a local
+    asset (backend/assets/gws_logo.png) rather than fetched from Drive -- more
+    reliable (no network call, no credentials dependency) for something used
+    on every page of every generated document.
+    """
     global _logo_cache
     if _logo_cache is not None:
         return _logo_cache
     try:
-        creds = _get_creds()
-        api_key = _get_api_key()
-        data = _download(LOGO_FILE_ID, creds, api_key)
-        _logo_cache = data
-        logger.info("Drive: logo downloaded and cached.")
-        return data
+        with open(_LOGO_ASSET_PATH, "rb") as f:
+            _logo_cache = f.read()
+        return _logo_cache
     except Exception as e:
-        logger.warning(f"Drive: logo download failed: {e}")
+        logger.warning(f"Logo asset load failed: {e}")
         return None
 
 
@@ -327,7 +332,7 @@ def browse_folder(folder_id: str = "") -> dict:
     service = build("drive", "v3", credentials=creds)
 
     res = service.files().list(
-        q=f"'{root}' in parents and trashed=false",
+        q=f"'{_escape_query(root)}' in parents and trashed=false",
         fields="files(id,name,mimeType)",
         orderBy="name desc",
         supportsAllDrives=True, includeItemsFromAllDrives=True,
@@ -339,6 +344,88 @@ def browse_folder(folder_id: str = "") -> dict:
     images = [{"file_id": f["id"], "name": f["name"]} for f in files
               if f["mimeType"].startswith("image/")]
     return {"folders": folders, "images": images}
+
+
+def browse_flat(date_from: str, date_to: str) -> list[dict]:
+    """
+    List every photo across every folder within [date_from, date_to] (inclusive,
+    'YYYY-MM-DD'), grouped by (date, folder_name) -- a flat alternative to
+    browse_folder() for when clicking through folders one at a time to find a
+    project's misfiled photos is too slow. Fetches date folders' subfolders and
+    each subfolder's images concurrently to keep this reasonably fast.
+    """
+    creds = _get_creds()
+    if not creds:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not set -- cannot browse Drive")
+    root = PHOTO_DRIVE_ROOT_FOLDER_ID
+    if not root:
+        raise ValueError("PHOTO_DRIVE_ROOT_FOLDER_ID not configured -- cannot browse Drive")
+
+    from googleapiclient.discovery import build
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _service():
+        # Built fresh per call/thread -- googleapiclient service objects (and the
+        # httplib2 transport underneath) aren't safe to share across threads.
+        return build("drive", "v3", credentials=creds)
+
+    top = _service().files().list(
+        q=f"'{root}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        fields="files(id,name)",
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    # Non-date-shaped folders (e.g. "_Unsorted", where the bot puts photos it
+    # can't confidently date) can't be meaningfully compared against the date
+    # range -- exclude them from the range check entirely rather than have a
+    # plain string comparison silently drop them (an underscore sorts after
+    # every digit, so they'd always compare greater than date_to).
+    _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    date_folders = [
+        f for f in top.get("files", [])
+        if not _DATE_RE.match(f["name"]) or date_from <= f["name"] <= date_to
+    ]
+
+    def list_children(parent_id, mime_filter=None):
+        # Never raises -- a single folder failing (rate limit, transient error)
+        # must not discard every other folder's already-fetched results.
+        try:
+            svc = _service()
+            q = f"'{parent_id}' in parents and trashed=false"
+            if mime_filter == "folder":
+                q += " and mimeType='application/vnd.google-apps.folder'"
+            elif mime_filter == "image":
+                q += " and mimeType contains 'image/'"
+            res = svc.files().list(
+                q=q, fields="files(id,name)",
+                supportsAllDrives=True, includeItemsFromAllDrives=True,
+            ).execute()
+            return res.get("files", [])
+        except Exception as e:
+            logger.warning(f"browse_flat: could not list children of {parent_id}: {e}")
+            return []
+
+    def process_date_folder(date_folder):
+        groups = []
+        subfolders = list_children(date_folder["id"], "folder")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            images_by_folder = list(pool.map(lambda sf: list_children(sf["id"], "image"), subfolders))
+        for subfolder, images in zip(subfolders, images_by_folder):
+            if not images:
+                continue
+            groups.append({
+                "date": date_folder["name"],
+                "folder_name": subfolder["name"],
+                "photos": [{"file_id": f["id"], "name": f["name"]} for f in images],
+            })
+        return groups
+
+    all_groups = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for groups in pool.map(process_date_folder, date_folders):
+            all_groups.extend(groups)
+
+    all_groups.sort(key=lambda g: (g["date"], g["folder_name"]))
+    return all_groups
 
 
 def get_thumbnail(file_id: str) -> bytes:

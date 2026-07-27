@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import { downloadReportFile } from '../downloadJob'
@@ -8,26 +8,33 @@ export default function MaintenanceHistoryPage() {
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(null)
   const [downloadProgress, setDownloadProgress] = useState(null) // {key, pct, step}
+  const downloadingRef = useRef(false)
   const navigate = useNavigate()
 
   useEffect(() => {
     api.get('/maintenance/history').then((r) => { setHistory(r.data); setLoading(false) }).catch(() => setLoading(false))
   }, [])
 
-  async function download(id, doc, fmt, name, e) {
+  async function download(id, fmt, name, e) {
     e?.stopPropagation()
-    const key = `${id}-${doc}-${fmt}`
-    if (downloading) return
+    // Ref guard, not just the `downloading` state check below -- state updates
+    // are batched/async, so a fast double-click (or clicking two rows' buttons
+    // in quick succession) can otherwise start two overlapping download jobs
+    // before the buttons visually disable.
+    if (downloadingRef.current) return
+    downloadingRef.current = true
+    const key = `${id}-${fmt}`
     setDownloading(key)
     setDownloadProgress({ key, pct: 0, step: 'Starting…' })
     try {
-      const filename = `${doc}_${name || 'report'}.${fmt}`.replace(/\s+/g, '_')
-      await downloadReportFile(id, doc, fmt, filename, (pct, step) => setDownloadProgress({ key, pct, step }))
+      const filename = `report_${name || 'report'}.${fmt}`.replace(/\s+/g, '_')
+      await downloadReportFile(id, fmt, filename, (pct, step) => setDownloadProgress({ key, pct, step }))
     } catch {
       alert('Download failed. Please try again.')
     } finally {
       setDownloading(null)
       setDownloadProgress(null)
+      downloadingRef.current = false
     }
   }
 
@@ -64,10 +71,8 @@ export default function MaintenanceHistoryPage() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'checklist', 'docx', r.project_name, e)} className="btn-secondary text-xs py-1">⬇ Checklist (Word)</button>
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'checklist', 'pdf', r.project_name, e)} className="btn-secondary text-xs py-1">⬇ Checklist (PDF)</button>
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'report', 'docx', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (Word)</button>
-                <button disabled={!!downloading} onClick={(e) => download(r.id, 'report', 'pdf', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (PDF)</button>
+                <button disabled={!!downloading} onClick={(e) => download(r.id, 'docx', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (Word)</button>
+                <button disabled={!!downloading} onClick={(e) => download(r.id, 'pdf', r.project_name, e)} className="btn-green text-xs py-1">⬇ Report (PDF)</button>
               </div>
             </div>
 

@@ -1,4 +1,4 @@
-"""Build the Maintenance Photo Report DOCX (letterhead cover + photo grid pages)."""
+"""Build the Maintenance Photo Report DOCX (letterhead cover + checklist + photo grid pages)."""
 import io
 from datetime import datetime
 from docx import Document
@@ -6,8 +6,37 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.image.image import Image as DocxImage
 
-PHOTOS_PER_PAGE = 4  # laid out as a 2x2 grid, matching the sample report's density
+from create_maintenance_checklist import add_checklist_section
+
+PHOTOS_PER_PAGE = 2  # 1 row of 2, side by side -- more room per photo than a 2x2 grid
+
+# Bounding box each photo must fit within, so a row + captions always fits on
+# one landscape page regardless of source photo orientation -- a portrait
+# phone photo scaled by width alone (no height cap) came out too tall to fit,
+# pushing rows across pages. A 2x2 grid gave each photo too little height
+# budget (~7.8cm) to stay a reasonable size once height-capped, so this uses
+# a single row instead -- about double the height budget.
+PHOTO_MAX_WIDTH = Cm(11.5)
+PHOTO_MAX_HEIGHT = Cm(16)
+
+
+def _fit_within_box(image_bytes, max_width, max_height):
+    """Returns (width, height) EMU that fit image_bytes' aspect ratio inside
+    the given box, preferring to fill it as much as possible."""
+    try:
+        img = DocxImage.from_blob(image_bytes)
+        aspect = img.px_width / img.px_height
+    except Exception:
+        return max_width, max_height  # corrupt/unreadable header -- fall back to the box itself
+
+    width = max_width
+    height = int(width / aspect)
+    if height > max_height:
+        height = max_height
+        width = int(height * aspect)
+    return width, height
 
 
 def _format_session_dates(dates: list[str]) -> tuple[str, str]:
@@ -77,6 +106,7 @@ def _add_gws_header(doc, logo_bytes):
 
 def build_report_docx(
     project: dict,
+    maintenance_date: str,
     photos: list[dict],
     logo_bytes: bytes = None,
 ) -> bytes:
@@ -129,6 +159,12 @@ def build_report_docx(
 
     doc.add_page_break()
 
+    # ── Checklist page (included in the report, not a separate document) ────
+    _add_gws_header(doc, logo_bytes)
+    add_checklist_section(doc, project, maintenance_date)
+
+    doc.add_page_break()
+
     # ── Session header page ─────────────────────────────────────────────────
     _add_gws_header(doc, logo_bytes)
     for _ in range(3):
@@ -155,7 +191,16 @@ def build_report_docx(
             cell = row.cells[i % 2]
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=Cm(11))
+            width, height = _fit_within_box(photo["bytes"], PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT)
+            try:
+                p.add_run().add_picture(io.BytesIO(photo["bytes"]), width=width, height=height)
+            except Exception:
+                # Corrupt/unreadable image (e.g. a partial WhatsApp upload) --
+                # _fit_within_box already fell back silently for this same case,
+                # so add_picture must not be allowed to crash the whole report
+                # over one bad photo.
+                run = p.add_run("[Photo could not be loaded]")
+                run.italic = True
             cap = cell.add_paragraph()
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             date_str = photo.get("date", "")
@@ -170,11 +215,20 @@ def build_report_docx(
 
     # ── End page ─────────────────────────────────────────────────────────────
     doc.add_page_break()
+    _add_gws_header(doc, logo_bytes)
+    for _ in range(4):
+        doc.add_paragraph()
     end = doc.add_paragraph()
     end.alignment = WD_ALIGN_PARAGRAPH.CENTER
     er = end.add_run("END OF REPORT")
     er.bold = True
-    er.font.size = Pt(16)
+    er.font.size = Pt(20)
+
+    thanks = doc.add_paragraph()
+    thanks.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tr = thanks.add_run("Thank You")
+    tr.bold = True
+    tr.font.size = Pt(20)
 
     buf = io.BytesIO()
     doc.save(buf)
