@@ -262,6 +262,12 @@ def _build_document(report: MaintenanceReport, fmt: str, on_progress=None):
                 logger.warning(f"Maintenance report {report.id}: could not fetch photo {file_id}: {e}")
             done += 1
             progress(int(done / total * 70), f"Fetching photo {done} of {total}…")
+    if report.photos and not photos_by_id:
+        # Every single fetch failed (e.g. Drive itself is unreachable) --
+        # distinct from a few individually-missing photos, this means the
+        # fetch step itself is broken and should surface as an error rather
+        # than silently producing a photo-less report.
+        raise RuntimeError("Could not fetch any of this report's photos from Drive")
     photos = [
         {"bytes": photos_by_id[p["file_id"]], "date": p.get("date", "")}
         for p in report.photos if p["file_id"] in photos_by_id
